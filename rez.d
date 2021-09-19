@@ -803,7 +803,8 @@ class DRAWING
     // -- ATTRIBUTES
 
     double
-        PixelSize;
+        PixelSize,
+        LineWidth;
     long
         ColumnCount,
         LineCount;
@@ -955,7 +956,11 @@ class DRAWING
                         );
                 }
 
-                file.write( " Z\" stroke=\"#000\" stroke-width=\"0.1\" fill=\"none\"/>\n" );
+                file.write(
+                    " Z\" stroke=\"#000\" stroke-width=\""
+                    ~ LineWidth.GetText()
+                    ~ "\" fill=\"none\"/>\n"
+                    );
             }
 
             file.write( "</g>\n" );
@@ -1142,7 +1147,8 @@ class DRAWING
     void SetFromImage(
         IMAGE image,
         COLOR drawing_color,
-        long maximum_color_distance
+        long maximum_color_distance,
+        double line_width
         )
     {
         long
@@ -1152,6 +1158,7 @@ class DRAWING
             point_index;
 
         PixelSize = image.PixelSize;
+        LineWidth = line_width;
 
         SetPoints( image, drawing_color, maximum_color_distance );
 
@@ -1184,6 +1191,7 @@ class DRAWING
         IMAGE image,
         string drawing_color_text,
         long maximum_color_distance,
+        double line_width,
         double polygon_height
         )
     {
@@ -1196,7 +1204,7 @@ class DRAWING
         writeln( "    Polygon height : ", polygon_height );
 
         drawing_color.SetFromText( drawing_color_text );
-        SetFromImage( image, drawing_color, maximum_color_distance );
+        SetFromImage( image, drawing_color, maximum_color_distance, line_width );
         PolygonHeight = polygon_height;
     }
 }
@@ -1500,7 +1508,7 @@ void main(
             image.Invert();
         }
         else if ( option == "--vectorize"
-                  && argument_count == 3
+                  && argument_count == 4
                   && image !is null )
         {
             drawing = new DRAWING();
@@ -1508,7 +1516,8 @@ void main(
                 image,
                 argument_array[ 0 ],
                 argument_array[ 1 ].to!long(),
-                argument_array[ 2 ].to!double()
+                argument_array[ 2 ].to!double(),
+                argument_array[ 3 ].to!double()
                 );
 
             mesh = new MESH();

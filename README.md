@@ -26,7 +26,7 @@ rez [options]
 --read-png <image path> <pixel size> : read a PNG image
 --binarize <minimum luminance> : binarize the image
 --invert : invert the image
---vectorize <drawing color> <maximum color distance> <polygon height> : vectorize the edges
+--vectorize <drawing color> <maximum color distance> <line width> <polygon height> : vectorize the edges
 --write-svg <drawing path> : save the edges in SVG format
 --write-obj <mesh path> : save the edges in OBJ format
 ```
@@ -44,6 +44,12 @@ Vectorize an image and save the edges in SVG and OBJ format.
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/test_svg.png)
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/test_obj.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_svg.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_obj.png)
 
 ## Dependencies
 
