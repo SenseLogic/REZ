@@ -27,8 +27,8 @@ rez [options]
 --binarize <minimum luminance> : binarize the image
 --invert : invert the image
 --vectorize <drawing color> <maximum color distance> <polygon height> : vectorize the edges
---write-svg <drawing path> : save the edges as a drawing in SVG format
---write-obj <mesh path> : save the edges as a mesh in OBJ format
+--write-svg <drawing path> : save the edges in SVG format
+--write-obj <mesh path> : save the edges in OBJ format
 ```
 
 ### Examples
