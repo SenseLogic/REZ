@@ -1555,7 +1555,7 @@ void main(
         writeln( "    --read-png <image path> <pixel size>" );
         writeln( "    --binarize <minimum luminance>" );
         writeln( "    --invert" );
-        writeln( "    --vectorize <drawing color> <maximum color distance> <polygon height>" );
+        writeln( "    --vectorize <drawing color> <maximum color distance> <line width> <polygon height>" );
         writeln( "    --write-svg <drawing path>" );
         writeln( "    --write-obj <mesh path>" );
         writeln( "Examples :" );
