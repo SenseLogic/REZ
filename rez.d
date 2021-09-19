@@ -893,8 +893,8 @@ class DRAWING
         VECTOR_3
             position_vector;
 
-        position_vector.X = ( ( edge.PositionVector.X - 1.0 ) - ColumnCount.to!double() * 0.0 ) * PixelSize;
-        position_vector.Y = ( ( edge.PositionVector.Y - 1.0 ) - LineCount.to!double() * 0.0 ) * PixelSize;
+        position_vector.X = ( edge.PositionVector.X - ( ColumnCount - 1 ).to!double() * 0.5 ) * PixelSize;
+        position_vector.Y = ( edge.PositionVector.Y - ( LineCount - 1 ).to!double() * 0.5 ) * PixelSize;
         position_vector.Z = height;
 
         return position_vector;
