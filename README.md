@@ -39,13 +39,11 @@ rez --read-png test.png 1 --vectorize 255.255.255 128 2.5 --write-svg OUT/test.s
 
 Vectorize an image and save the edges in SVG and OBJ format.
 
-<style>img { width: 100%; height: auto; }</style>
-
-![](https://github.com/senselogic/REZ/blob/master/TEST/test.png)
-
-![](https://github.com/senselogic/REZ/blob/master/TEST/OUT/test.svg)
-
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/test.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/test_svg.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/test_obj.png)
 
 ## Dependencies
 

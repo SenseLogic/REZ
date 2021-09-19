@@ -893,7 +893,7 @@ class DRAWING
             position_vector;
 
         position_vector.X = ( edge.PositionVector.X - ( ColumnCount - 1 ).to!double() * 0.5 ) * PixelSize;
-        position_vector.Y = ( edge.PositionVector.Y - ( LineCount - 1 ).to!double() * 0.5 ) * PixelSize;
+        position_vector.Y = -( edge.PositionVector.Y - ( LineCount - 1 ).to!double() * 0.5 ) * PixelSize;
         position_vector.Z = height;
 
         return position_vector;
@@ -919,9 +919,9 @@ class DRAWING
             file.open( file_path, "w" );
             file.write(
                 "<svg width=\""
-                ~ ColumnCount.to!string()
+                ~ ( ColumnCount - 1 ).to!string()
                 ~ "\" height=\""
-                ~ LineCount.to!string()
+                ~ ( LineCount - 1 ).to!string()
                 ~ "\" xmlns=\"http://www.w3.org/2000/svg\">\n"
                 );
             file.write( "<g>\n" );
@@ -955,7 +955,7 @@ class DRAWING
                         );
                 }
 
-                file.write( " Z\" stroke=\"#000\" stroke-width=\"0.5\" fill=\"none\"/>\n" );
+                file.write( " Z\" stroke=\"#000\" stroke-width=\"0.1\" fill=\"none\"/>\n" );
             }
 
             file.write( "</g>\n" );
@@ -1331,10 +1331,10 @@ class MESH
                     second_edge_index = 0;
                 }
 
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], 0.0 ) );
                 AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], 0.0 ) );
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], drawing.PolygonHeight ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], 0.0 ) );
                 AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], drawing.PolygonHeight ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], drawing.PolygonHeight ) );
 
                 PositionVectorIndexArray ~= -1;
             }
