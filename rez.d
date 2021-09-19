@@ -51,20 +51,14 @@ struct VECTOR_2
 
     // ~~
 
-    void SetAverageVector(
+    void SetInterpolatedVector(
         ref VECTOR_2 first_vector,
-        double first_vector_factor,
         ref VECTOR_2 second_vector,
-        double second_vector_factor
+        double interpolation_factor
         )
     {
-        double
-            one_over_factor_sum;
-
-        one_over_factor_sum = 1.0 / ( first_vector_factor + second_vector_factor );
-
-        X = ( first_vector.X * first_vector_factor + second_vector.X * second_vector_factor ) * one_over_factor_sum;
-        Y = ( first_vector.Y * first_vector_factor + second_vector.Y * second_vector_factor ) * one_over_factor_sum;
+        X = first_vector.X + ( second_vector.X - first_vector.X ) * interpolation_factor;
+        Y = first_vector.Y + ( second_vector.Y - first_vector.Y ) * interpolation_factor;
     }
 }
 
@@ -681,7 +675,7 @@ struct EDGE
         PolygonIndex;
     VECTOR_2
         PositionVector,
-        NewPositionVector;
+        OldPositionVector;
     bool
         IsRemoved;
 
@@ -748,52 +742,57 @@ struct POLYGON
     void Smooth(
         )
     {
+        double
+            interpolation_factor;
         long
             edge_index,
             next_edge_index,
             prior_edge_index;
 
+        foreach ( ref edge; EdgeArray )
+        {
+            edge.OldPositionVector = edge.PositionVector;
+        }
+
         for ( edge_index = 0;
               edge_index < EdgeArray.length;
               ++edge_index )
         {
-            prior_edge_index = ( edge_index + EdgeArray.length - 1 ) % EdgeArray.length;
-            next_edge_index = ( edge_index + 1 ) % EdgeArray.length;
+            prior_edge_index = edge_index - 1;
+
+            if ( prior_edge_index < 0 )
+            {
+                prior_edge_index += EdgeArray.length;
+            }
+
+            next_edge_index = edge_index + 1;
+
+            if ( next_edge_index >= EdgeArray.length )
+            {
+                next_edge_index -= EdgeArray.length;
+            }
 
             if ( EdgeArray[ edge_index ].PixelCount == 1
                  && EdgeArray[ next_edge_index ].Direction == EdgeArray[ prior_edge_index ].Direction )
             {
-                EdgeArray[ edge_index ].NewPositionVector.SetAverageVector(
-                    EdgeArray[ edge_index ].PositionVector,
-                    EdgeArray[ edge_index ].PixelCount,
-                    EdgeArray[ next_edge_index ].PositionVector,
-                    EdgeArray[ next_edge_index ].PixelCount
+                interpolation_factor
+                    = EdgeArray[ next_edge_index ].PixelCount.to!double()
+                      / ( EdgeArray[ prior_edge_index ].PixelCount
+                          + EdgeArray[ next_edge_index ].PixelCount ).to!double();
+
+                EdgeArray[ next_edge_index ].PositionVector.SetInterpolatedVector(
+                    EdgeArray[ edge_index ].OldPositionVector,
+                    EdgeArray[ next_edge_index ].OldPositionVector,
+                    interpolation_factor
                     );
 
                 EdgeArray[ edge_index ].IsRemoved = true;
 
                 ++edge_index;
             }
-            else
-            {
-                EdgeArray[ edge_index ].NewPositionVector
-                    = EdgeArray[ edge_index ].PositionVector;
-            }
         }
 
         Pack();
-
-        foreach ( ref edge; EdgeArray )
-        {
-            edge.PositionVector = edge.NewPositionVector;
-        }
-    }
-
-    // ~~
-
-    void Simplify(
-        )
-    {
     }
 }
 
@@ -1134,9 +1133,7 @@ class DRAWING
 
         assert( polygon.EdgeArray.length >= 4 );
 
-        //polygon.Smooth();
-        //polygon.Simplify();
-
+        polygon.Smooth();
         PolygonArray ~= polygon;
     }
 

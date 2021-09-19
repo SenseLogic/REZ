@@ -39,6 +39,12 @@ rez --read-png test.png 1 --vectorize 255.255.255 128 2.5 --write-svg OUT/test.s
 
 Vectorize an image and save the edges in SVG and OBJ format.
 
+![](https://github.com/senselogic/NEBULA/blob/master/TEST/test.png)
+
+![](https://github.com/senselogic/NEBULA/blob/master/TEST/OUT/test.svg)
+
+![](https://github.com/senselogic/NEBULA/blob/master/SCREENSHOT/test.png)
+
 ## Dependencies
 
 *   [ARSD PNG library](https://github.com/adamdruppe/arsd)
