@@ -821,7 +821,8 @@ class DRAWING
     void AddPolygon(
         long column_index,
         long line_index,
-        long direction
+        long direction,
+        double maximum_position_distance
         )
     {
         long
@@ -899,6 +900,12 @@ class DRAWING
         assert( polygon.EdgeArray.length >= 4 );
 
         polygon.Smooth();
+
+        if ( maximum_position_distance > 0.0 )
+        {
+            polygon.Simplify( maximum_position_distance );
+        }
+
         PolygonArray ~= polygon;
     }
 
@@ -908,6 +915,7 @@ class DRAWING
         IMAGE image,
         COLOR drawing_color,
         long maximum_color_distance,
+        double maximum_position_distance,
         double line_width
         )
     {
@@ -938,7 +946,7 @@ class DRAWING
                 {
                     if ( PointArray[ point_index ].EdgeArray[ direction ].IsUnused() )
                     {
-                        AddPolygon( column_index, line_index, direction );
+                        AddPolygon( column_index, line_index, direction, maximum_position_distance );
                     }
                 }
             }
@@ -951,6 +959,7 @@ class DRAWING
         IMAGE image,
         string drawing_color_text,
         long maximum_color_distance,
+        double maximum_position_distance,
         double line_width,
         double polygon_height
         )
@@ -964,20 +973,8 @@ class DRAWING
         writeln( "    Polygon height : ", polygon_height );
 
         drawing_color.SetFromText( drawing_color_text );
-        SetFromImage( image, drawing_color, maximum_color_distance, line_width );
+        SetFromImage( image, drawing_color, maximum_color_distance, maximum_position_distance, line_width );
         PolygonHeight = polygon_height;
-    }
-
-    // ~~
-
-    void Simplify(
-        double maximum_position_distance
-        )
-    {
-        foreach ( ref polygon; PolygonArray )
-        {
-            polygon.Simplify( maximum_position_distance );
-        }
     }
 }
 
@@ -1280,7 +1277,7 @@ void main(
             image.Invert();
         }
         else if ( option == "--vectorize"
-                  && argument_count == 4
+                  && argument_count == 5
                   && image !is null )
         {
             drawing = new DRAWING();
@@ -1289,15 +1286,8 @@ void main(
                 argument_array[ 0 ],
                 argument_array[ 1 ].to!long(),
                 argument_array[ 2 ].to!double(),
-                argument_array[ 3 ].to!double()
-                );
-        }
-        else if ( option == "--simplify"
-                  && argument_count == 1
-                  && drawing !is null )
-        {
-            drawing.Simplify(
-                argument_array[ 0 ].to!double()
+                argument_array[ 3 ].to!double(),
+                argument_array[ 4 ].to!double()
                 );
         }
         else if ( option == "--write-svg"
@@ -1339,8 +1329,7 @@ void main(
         writeln( "    --write-svg <drawing path>" );
         writeln( "    --write-obj <mesh path>" );
         writeln( "Examples :" );
-        writeln( "    rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
-        writeln( "    rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 2.5 --simplify 0.1 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
+        writeln( "    rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 0.1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
 
         Abort( "Invalid arguments : " ~ argument_array.to!string() );
     }

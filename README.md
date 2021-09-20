@@ -26,8 +26,7 @@ rez [options]
 --read-png <image path> <pixel size> : read a PNG image
 --binarize <minimum luminance> : binarize the image
 --invert : invert the image
---vectorize <drawing color> <maximum color distance> <line width> <polygon height> : vectorize the edges
---simplify <maximum position distance> : simplify the edges
+--vectorize <drawing color> <maximum color distance> <maximum position distance> <line width> <polygon height> : vectorize the edges
 --write-svg <drawing path> : save the edges in SVG format
 --write-obj <mesh path> : save the edges in OBJ format
 ```
@@ -35,7 +34,7 @@ rez [options]
 ### Examples
 
 ```bash
-rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 2.5 --simplify 0.1 --write-svg OUT/test.svg --write-obj OUT/test.obj
+rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 0.1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj
 ```
 
 Vectorize an image and save the edges in SVG and OBJ format.
