@@ -62,7 +62,7 @@ Only supports PNG files.
 
 ## Version
 
-0.1
+1.0
 
 ## Author
 
