@@ -1329,7 +1329,7 @@ void main(
         writeln( "    --write-svg <drawing path>" );
         writeln( "    --write-obj <mesh path>" );
         writeln( "Examples :" );
-        writeln( "    rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 0.1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
+        writeln( "    rez --read-png test.png 0.01 --vectorize 255.255.255 128 0.5 1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
 
         Abort( "Invalid arguments : " ~ argument_array.to!string() );
     }
