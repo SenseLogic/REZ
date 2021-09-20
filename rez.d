@@ -38,18 +38,23 @@ struct VECTOR_2
         X = 0.0,
         Y = 0.0;
 
-    // -- OPERATIONS
+    // -- INQUIRIES
 
-    void SetAverageVector(
-        ref VECTOR_2 first_vector,
-        ref VECTOR_2 second_vector
+    double GetDistance(
+        VECTOR_2 vector
         )
     {
-        X = ( first_vector.X + second_vector.X ) * 0.5;
-        Y = ( first_vector.Y + second_vector.Y ) * 0.5;
+        double
+            x_distance,
+            y_distance;
+
+        x_distance = vector.X - X;
+        y_distance = vector.Y - Y;
+
+        return sqrt( x_distance * x_distance + y_distance * y_distance );
     }
 
-    // ~~
+    // -- OPERATIONS
 
     void SetInterpolatedVector(
         ref VECTOR_2 first_vector,
@@ -89,311 +94,6 @@ struct VECTOR_3
         z_distance = position_vector.Z - Z;
 
         return sqrt( x_distance * x_distance + y_distance * y_distance + z_distance * z_distance );
-    }
-
-    // -- OPERATIONS
-
-    void SetNull(
-        )
-    {
-        X = 0.0;
-        Y = 0.0;
-        Z = 0.0;
-    }
-
-    // ~~
-
-    void SetUnit(
-        )
-    {
-        X = 1.0;
-        Y = 1.0;
-        Z = 1.0;
-    }
-
-    // ~~
-
-    void AddVector(
-        ref VECTOR_3 vector
-        )
-    {
-        X += vector.X;
-        Y += vector.Y;
-        Z += vector.Z;
-    }
-
-    // ~~
-
-    void AddScaledVector(
-        ref VECTOR_3 vector,
-        double factor
-        )
-    {
-        X += vector.X * factor;
-        Y += vector.Y * factor;
-        Z += vector.Z * factor;
-    }
-
-    // ~~
-
-    void MultiplyScalar(
-        double scalar
-        )
-    {
-        X *= scalar;
-        Y *= scalar;
-        Z *= scalar;
-    }
-
-    // ~~
-
-    void SetAverageVector(
-        ref VECTOR_3 first_vector,
-        ref VECTOR_3 second_vector
-        )
-    {
-        X = ( first_vector.X + second_vector.X ) * 0.5;
-        Y = ( first_vector.Y + second_vector.Y ) * 0.5;
-        Z = ( first_vector.Z + second_vector.Z ) * 0.5;
-    }
-
-    // ~~
-
-    void Clip(
-        ref VECTOR_3 minimum_vector,
-        ref VECTOR_3 maximum_vector
-        )
-    {
-        if ( X < minimum_vector.X )
-        {
-            X = minimum_vector.X;
-        }
-
-        if ( Y < minimum_vector.Y )
-        {
-            Y = minimum_vector.Y;
-        }
-
-        if ( Z < minimum_vector.Z )
-        {
-            Z = minimum_vector.Z;
-        }
-
-        if ( X > maximum_vector.X )
-        {
-            X = maximum_vector.X;
-        }
-
-        if ( Y > maximum_vector.Y )
-        {
-            Y = maximum_vector.Y;
-        }
-
-        if ( Z > maximum_vector.Z )
-        {
-            Z = maximum_vector.Z;
-        }
-    }
-
-    // ~~
-
-    void Translate(
-        double x_translation,
-        double y_translation,
-        double z_translation
-        )
-    {
-        X += x_translation;
-        Y += y_translation;
-        Z += z_translation;
-    }
-
-    // ~~
-
-    void Scale(
-        double x_scaling,
-        double y_scaling,
-        double z_scaling
-        )
-    {
-        X *= x_scaling;
-        Y *= y_scaling;
-        Z *= z_scaling;
-    }
-
-    // ~~
-
-    void RotateAroundX(
-        double x_angle_cosinus,
-        double x_angle_sinus
-        )
-    {
-        double
-            y;
-
-        y = Y;
-        Y = Y * x_angle_cosinus - Z * x_angle_sinus;
-        Z = y * x_angle_sinus + Z * x_angle_cosinus;
-    }
-
-    // ~~
-
-    void RotateAroundY(
-        double y_angle_cosinus,
-        double y_angle_sinus
-        )
-    {
-        double
-            x;
-
-        x = X;
-        X = X * y_angle_cosinus + Z * y_angle_sinus;
-        Z = Z * y_angle_cosinus - x * y_angle_sinus;
-    }
-
-    // ~~
-
-    void RotateAroundZ(
-        double z_angle_cosinus,
-        double z_angle_sinus
-        )
-    {
-        double
-            x,
-            y;
-
-        x = X;
-        X = X * z_angle_cosinus - Y * z_angle_sinus;
-        Y = x * z_angle_sinus + Y * z_angle_cosinus;
-    }
-
-    // ~~
-
-    void SetInterpolatedVector(
-        ref VECTOR_3 first_vector,
-        ref VECTOR_3 second_vector,
-        double interpolation_factor
-        )
-    {
-        X = first_vector.X + ( second_vector.X - first_vector.X ) * interpolation_factor;
-        Y = first_vector.Y + ( second_vector.Y - first_vector.Y ) * interpolation_factor;
-        Z = first_vector.Z + ( second_vector.Z - first_vector.Z ) * interpolation_factor;
-    }
-}
-
-// ~~
-
-struct VECTOR_4
-{
-    // -- ATTRIBUTES
-
-    double
-        X = 0.0,
-        Y = 0.0,
-        Z = 0.0,
-        W = 0.0;
-
-    // -- OPERATIONS
-
-    void SetNull(
-        )
-    {
-        X = 0.0;
-        Y = 0.0;
-        Z = 0.0;
-        W = 0.0;
-    }
-
-    // ~~
-
-    void SetUnit(
-        )
-    {
-        X = 1.0;
-        Y = 1.0;
-        Z = 1.0;
-        W = 1.0;
-    }
-
-    // ~~
-
-    void AddVector(
-        ref VECTOR_4 vector
-        )
-    {
-        X += vector.X;
-        Y += vector.Y;
-        Z += vector.Z;
-        W += vector.W;
-    }
-
-    // ~~
-
-    void MultiplyScalar(
-        double scalar
-        )
-    {
-        X *= scalar;
-        Y *= scalar;
-        Z *= scalar;
-        W *= scalar;
-    }
-
-    // ~~
-
-    void SetAverageVector(
-        ref VECTOR_4 first_vector,
-        ref VECTOR_4 second_vector
-        )
-    {
-        X = ( first_vector.X + second_vector.X ) * 0.5;
-        Y = ( first_vector.Y + second_vector.Y ) * 0.5;
-        Z = ( first_vector.Z + second_vector.Z ) * 0.5;
-        W = ( first_vector.W + second_vector.W ) * 0.5;
-    }
-
-    // ~~
-
-    void Translate(
-        double x_translation,
-        double y_translation,
-        double z_translation,
-        double w_translation
-        )
-    {
-        X += x_translation;
-        Y += y_translation;
-        Z += z_translation;
-        W += w_translation;
-    }
-
-    // ~~
-
-    void Scale(
-        double x_scaling,
-        double y_scaling,
-        double z_scaling,
-        double w_scaling
-        )
-    {
-        X *= x_scaling;
-        Y *= y_scaling;
-        Z *= z_scaling;
-        W *= w_scaling;
-    }
-
-    // ~~
-
-    void SetInterpolatedVector(
-        ref VECTOR_4 first_vector,
-        ref VECTOR_4 second_vector,
-        double interpolation_factor
-        )
-    {
-        X = first_vector.X + ( second_vector.X - first_vector.X ) * interpolation_factor;
-        Y = first_vector.Y + ( second_vector.Y - first_vector.Y ) * interpolation_factor;
-        Z = first_vector.Z + ( second_vector.Z - first_vector.Z ) * interpolation_factor;
-        W = first_vector.W + ( second_vector.W - first_vector.W ) * interpolation_factor;
     }
 }
 
@@ -793,6 +493,66 @@ struct POLYGON
         }
 
         Pack();
+    }
+
+    // ~~
+
+    void Simplify(
+        double maximum_position_distance
+        )
+    {
+        double
+            position_distance;
+        long
+            edge_index,
+            next_edge_index,
+            prior_edge_index;
+        VECTOR_2
+            next_position_vector,
+            position_vector,
+            prior_position_vector;
+
+        foreach ( ref edge; EdgeArray )
+        {
+            edge.OldPositionVector = edge.PositionVector;
+        }
+
+        for ( edge_index = 0;
+              edge_index < EdgeArray.length
+              && EdgeArray.length >= 3;
+              ++edge_index )
+        {
+            prior_edge_index = edge_index - 1;
+
+            if ( prior_edge_index < 0 )
+            {
+                prior_edge_index += EdgeArray.length;
+            }
+
+            next_edge_index = edge_index + 1;
+
+            if ( next_edge_index >= EdgeArray.length )
+            {
+                next_edge_index -= EdgeArray.length;
+            }
+
+            prior_position_vector = EdgeArray[ prior_edge_index ].OldPositionVector;
+            next_position_vector = EdgeArray[ next_edge_index ].OldPositionVector;
+            position_vector = EdgeArray[ edge_index ].PositionVector;
+
+            position_distance
+                = position_vector.GetDistance( prior_position_vector )
+                  + position_vector.GetDistance( next_position_vector )
+                  - prior_position_vector.GetDistance( next_position_vector );
+
+            if ( position_distance >= -maximum_position_distance
+                 && position_distance <= maximum_position_distance )
+            {
+                EdgeArray = EdgeArray[ 0 .. edge_index ] ~ EdgeArray[ edge_index + 1 .. $ ];
+
+                --edge_index;
+            }
+        }
     }
 }
 
@@ -1207,6 +967,18 @@ class DRAWING
         SetFromImage( image, drawing_color, maximum_color_distance, line_width );
         PolygonHeight = polygon_height;
     }
+
+    // ~~
+
+    void Simplify(
+        double maximum_position_distance
+        )
+    {
+        foreach ( ref polygon; PolygonArray )
+        {
+            polygon.Simplify( maximum_position_distance );
+        }
+    }
 }
 
 // ~~
@@ -1519,9 +1291,14 @@ void main(
                 argument_array[ 2 ].to!double(),
                 argument_array[ 3 ].to!double()
                 );
-
-            mesh = new MESH();
-            mesh.SetFromDrawing( drawing );
+        }
+        else if ( option == "--simplify"
+                  && argument_count == 1
+                  && drawing !is null )
+        {
+            drawing.Simplify(
+                argument_array[ 0 ].to!double()
+                );
         }
         else if ( option == "--write-svg"
                   && argument_count == 1
@@ -1533,8 +1310,10 @@ void main(
         }
         else if ( option == "--write-obj"
                   && argument_count == 1
-                  && mesh !is null )
+                  && drawing !is null )
         {
+            mesh = new MESH();
+            mesh.SetFromDrawing( drawing );
             mesh.WriteObjFile(
                 argument_array[ 0 ]
                 );
@@ -1556,10 +1335,12 @@ void main(
         writeln( "    --binarize <minimum luminance>" );
         writeln( "    --invert" );
         writeln( "    --vectorize <drawing color> <maximum color distance> <line width> <polygon height>" );
+        writeln( "    --simplify <maximum position distance>" );
         writeln( "    --write-svg <drawing path>" );
         writeln( "    --write-obj <mesh path>" );
         writeln( "Examples :" );
-        writeln( "    rez --load input.png --pixelize 1 1 128 0.98 pixel_mask.png --save output.png" );
+        writeln( "    rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
+        writeln( "    rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 2.5 --simplify 0.1 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
 
         Abort( "Invalid arguments : " ~ argument_array.to!string() );
     }

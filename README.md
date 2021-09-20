@@ -27,6 +27,7 @@ rez [options]
 --binarize <minimum luminance> : binarize the image
 --invert : invert the image
 --vectorize <drawing color> <maximum color distance> <line width> <polygon height> : vectorize the edges
+--simplify <maximum position distance> : simplify the edges
 --write-svg <drawing path> : save the edges in SVG format
 --write-obj <mesh path> : save the edges in OBJ format
 ```
@@ -34,7 +35,7 @@ rez [options]
 ### Examples
 
 ```bash
-rez --read-png test.png 1 --vectorize 255.255.255 128 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj
+rez --read-png test.png 1 --vectorize 255.255.255 128 0.1 2.5 --simplify 0.1 --write-svg OUT/test.svg --write-obj OUT/test.obj
 ```
 
 Vectorize an image and save the edges in SVG and OBJ format.
@@ -47,7 +48,9 @@ Vectorize an image and save the edges in SVG and OBJ format.
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint.png)
 
-![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_svg.png)
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_svg_1.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_svg_2.png)
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_obj.png)
 
