@@ -512,11 +512,6 @@ struct POLYGON
             position_vector,
             prior_position_vector;
 
-        foreach ( ref edge; EdgeArray )
-        {
-            edge.OldPositionVector = edge.PositionVector;
-        }
-
         for ( edge_index = 0;
               edge_index < EdgeArray.length
               && EdgeArray.length >= 3;
@@ -536,8 +531,8 @@ struct POLYGON
                 next_edge_index -= EdgeArray.length;
             }
 
-            prior_position_vector = EdgeArray[ prior_edge_index ].OldPositionVector;
-            next_position_vector = EdgeArray[ next_edge_index ].OldPositionVector;
+            prior_position_vector = EdgeArray[ prior_edge_index ].PositionVector;
+            next_position_vector = EdgeArray[ next_edge_index ].PositionVector;
             position_vector = EdgeArray[ edge_index ].PositionVector;
 
             position_distance

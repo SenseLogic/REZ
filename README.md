@@ -41,9 +41,11 @@ Vectorize an image and save the edges in SVG and OBJ format.
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint.png)
 
-![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_svg.png)
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_2_svg.png)
 
-![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_obj.png)
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_3_svg.png)
+
+![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint_3_obj.png)
 
 ## Dependencies
 
