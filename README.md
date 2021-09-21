@@ -2,7 +2,7 @@
 
 # Rez
 
-Raster image vectorizer.
+Raster image line vectorizer.
 
 ## Installation
 
