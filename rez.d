@@ -24,9 +24,9 @@ import arsd.color : Color, MemoryImage, TrueColorImage;
 import arsd.png : readPng, writePng;
 import core.stdc.stdlib : exit;
 import std.conv : to;
-import std.math : sqrt;
+import std.math : abs, floor, ceil, cos, sin, sqrt, PI;
 import std.stdio : writeln, File;
-import std.string : endsWith, format, indexOf, split, startsWith;
+import std.string : endsWith, format, indexOf, join, split, startsWith;
 
 // -- TYPES
 
@@ -64,6 +64,49 @@ struct VECTOR_2
     {
         X = first_vector.X + ( second_vector.X - first_vector.X ) * interpolation_factor;
         Y = first_vector.Y + ( second_vector.Y - first_vector.Y ) * interpolation_factor;
+    }
+
+    // ~~
+
+    void InflateVector(
+        VECTOR_2 vector
+        )
+    {
+        double
+            minimum_x,
+            minimum_y;
+
+        minimum_x = vector.X.abs();
+        minimum_y = vector.Y.abs();
+
+        if ( X < minimum_x )
+        {
+            X = minimum_x;
+        }
+
+        if ( Y < minimum_y )
+        {
+            Y = minimum_y;
+        }
+    }
+
+    // ~~
+
+    void Rotate(
+        double angle
+        )
+    {
+        double
+            angle_cosinus,
+            angle_sinus,
+            old_x;
+
+        angle_cosinus = angle.cos();
+        angle_sinus = angle.sin();
+
+        old_x = X;
+        X = X * angle_cosinus - Y * angle_sinus;
+        Y = old_x * angle_sinus + Y * angle_cosinus;
     }
 }
 
@@ -109,41 +152,6 @@ struct COLOR
         Blue,
         Alpha = 255;
 
-    // -- INQUIRIES
-
-    long GetLuminance(
-        )
-    {
-        return
-            ( cast( long )Red * 77
-              + cast( long )Green * 151
-              + cast( long )Blue * 28 ) >> 8;
-    }
-
-    // ~~
-
-    long GetSquareDistance(
-        COLOR color
-        )
-    {
-        long
-            blue_offset,
-            green_offset,
-            red_mean,
-            red_offset,
-            square_distance;
-
-        red_mean = ( cast( long )Red + cast( long )color.Red ) >> 1;
-        red_offset = cast( long )Red - cast( long )color.Red;
-        green_offset = cast( long )Green - cast( long )color.Green;
-        blue_offset = cast( long )Blue - cast( long )color.Blue;
-
-        return
-            ( ( ( 512 + red_mean ) * red_offset * red_offset ) >> 8 )
-            + 4 * green_offset * green_offset
-            + ( ( ( 767 - red_mean ) * blue_offset * blue_offset ) >> 8 );
-    }
-
     // -- OPERATIONS
 
     void SetFromText(
@@ -175,41 +183,86 @@ struct COLOR
             Abort( "Invalid color : " ~ text );
         }
     }
-
-    // ~~
-
-    void Binarize(
-        long minimum_luminance = 128
-        )
-    {
-        if ( GetLuminance() < minimum_luminance )
-        {
-            Red = 0;
-            Green = 0;
-            Blue = 0;
-        }
-        else
-        {
-            Red = 255;
-            Green = 255;
-            Blue = 255;
-        }
-    }
-
-    // ~~
-
-    void Invert(
-        )
-    {
-        Red = 255 - Red;
-        Green = 255 - Red;
-        Blue = 255 - Red;
-    }
 }
 
 // ~~
 
-alias PIXEL = COLOR;
+struct PIXEL
+{
+    // -- ATTRIBUTES
+
+    ubyte
+        Opacity = 0;
+
+    // -- OPERATIONS
+
+    void SetOpacity(
+        long opacity
+        )
+    {
+        Opacity = cast( ubyte )opacity;
+    }
+
+    // ~~
+
+    void SetFromColor(
+        ubyte color_red,
+        ubyte color_green,
+        ubyte color_blue,
+        ubyte color_alpha,
+        long minimum_luminance,
+        long maximum_luminance,
+        long first_luminance,
+        long last_luminance
+        )
+    {
+        long
+            luminance;
+
+        luminance
+            = ( cast( long )color_red * 77
+                + cast( long )color_green * 151
+                + cast( long )color_blue * 28 ) >> 8;
+
+        if ( luminance < minimum_luminance )
+        {
+            luminance = minimum_luminance;
+        }
+        else if ( luminance > maximum_luminance )
+        {
+            luminance = maximum_luminance;
+        }
+
+        luminance
+            = first_luminance
+              + ( luminance - minimum_luminance )
+                * ( last_luminance - first_luminance )
+                / ( maximum_luminance - minimum_luminance );
+
+        if ( luminance < 0 )
+        {
+            luminance = 0;
+        }
+        else if ( luminance > 255 )
+        {
+            luminance = 255;
+        }
+
+        SetOpacity( ( luminance * color_alpha ) / 255 );
+    }
+
+    // ~~
+
+    void Trace(
+        PIXEL pixel
+        )
+    {
+        if ( Opacity < pixel.Opacity )
+        {
+            Opacity = pixel.Opacity;
+        }
+    }
+}
 
 // ~~
 
@@ -217,13 +270,15 @@ class IMAGE
 {
     // -- ATTRIBUTES
 
-    double
-        PixelSize;
     long
         ColumnCount,
         LineCount;
     PIXEL[]
         PixelArray;
+    double
+        PixelSize;
+    long
+        MaximumBadPixelCount;
 
     // -- INQUIRIES
 
@@ -257,8 +312,7 @@ class IMAGE
     bool HasPixel(
         long column_index,
         long line_index,
-        COLOR color,
-        long maximum_color_distance
+        long minimum_opacity
         )
     {
         return
@@ -266,9 +320,75 @@ class IMAGE
             && column_index < ColumnCount
             && line_index >= 0
             && line_index < LineCount
-            && PixelArray[ line_index * ColumnCount + column_index ].Alpha >= 128
-            && PixelArray[ line_index * ColumnCount + column_index ].GetSquareDistance( color )
-               <= maximum_color_distance * maximum_color_distance;
+            && PixelArray[ line_index * ColumnCount + column_index ].Opacity >= minimum_opacity;
+    }
+
+    // ~~
+
+    long GetOpacity(
+        long column_index,
+        long line_index
+        )
+    {
+        if ( column_index >= 0
+             && column_index < ColumnCount
+             && line_index >= 0
+             && line_index < LineCount )
+        {
+            return PixelArray[ GetPixelIndex( column_index, line_index ) ].Opacity;
+        }
+        else
+        {
+            return 0;
+        }
+    }
+
+    // ~~
+
+    void WritePngFile(
+        string file_path,
+        string pixel_color_text = "255.255.255"
+        )
+    {
+        long
+            column_index,
+            line_index;
+        Color
+            color;
+        TrueColorImage
+            true_color_image;
+        COLOR
+            pixel_color;
+        PIXEL
+            pixel;
+
+        writeln( "Saving image : ", file_path );
+        writeln( "    Line count : ", LineCount );
+        writeln( "    Column count : ", ColumnCount );
+        writeln( "    Pixel color : ", pixel_color_text );
+
+        pixel_color.SetFromText( pixel_color_text );
+
+        true_color_image = new TrueColorImage( cast( int )ColumnCount, cast( int )LineCount );
+
+        for ( line_index = 0;
+              line_index < LineCount;
+              ++line_index )
+        {
+            for ( column_index = 0;
+                  column_index < ColumnCount;
+                  ++column_index )
+            {
+                color.r = pixel_color.Red;
+                color.g = pixel_color.Green;
+                color.b = pixel_color.Blue;
+                color.a = GetPixel( column_index, line_index ).Opacity;
+
+                true_color_image.setPixel( cast( int )column_index, cast( int )line_index, color );
+            }
+        }
+
+        writePng( file_path, true_color_image );
     }
 
     // -- OPERATIONS
@@ -284,9 +404,24 @@ class IMAGE
 
     // ~~
 
+    void TracePixel(
+        long column_index,
+        long line_index,
+        PIXEL pixel
+        )
+    {
+        PixelArray[ GetPixelIndex( column_index, line_index ) ].Trace( pixel );
+    }
+
+    // ~~
+
     void ReadPngFile(
         string file_path,
-        double pixel_size
+        double pixel_size = 1.0,
+        long minimum_luminance = 0,
+        long maximum_luminance = 255,
+        long first_luminance = 0,
+        long last_luminance = 255
         )
     {
         long
@@ -301,16 +436,20 @@ class IMAGE
 
         writeln( "Loading image : ", file_path );
 
-        PixelSize = pixel_size;
-
         true_color_image = readPng( file_path ).getAsTrueColorImage();
 
         LineCount = true_color_image.height();
         ColumnCount = true_color_image.width();
         PixelArray.length = LineCount * ColumnCount;
+        PixelSize = pixel_size;
 
         writeln( "    Line count : ", LineCount );
         writeln( "    Column count : ", ColumnCount );
+        writeln( "    Pixel size : ", pixel_size );
+        writeln( "    Minimum luminance : ", minimum_luminance );
+        writeln( "    Maximum luminance : ", maximum_luminance );
+        writeln( "    First luminance : ", first_luminance );
+        writeln( "    Last luminance : ", last_luminance );
 
         for ( line_index = 0;
               line_index < LineCount;
@@ -322,11 +461,7 @@ class IMAGE
             {
                 color = true_color_image.getPixel( cast( int )column_index, cast( int )line_index );
 
-                pixel.Red = color.r;
-                pixel.Green = color.g;
-                pixel.Blue = color.b;
-                pixel.Alpha = color.a;
-
+                pixel.SetFromColor( color.r, color.g, color.b, color.a, minimum_luminance, maximum_luminance, first_luminance, last_luminance );
                 SetPixel( column_index, line_index, pixel );
             }
         }
@@ -334,32 +469,344 @@ class IMAGE
 
     // ~~
 
-    void Binarize(
-        ulong minimum_luminance
+    void Resize(
+        long column_count,
+        long line_count
         )
     {
-        writeln( "Binarizing image" );
-        writeln( "    Minimum luminance : ", minimum_luminance );
+        ColumnCount = column_count;
+        LineCount = line_count;
+        PixelArray.length = column_count * line_count;
+    }
 
-        foreach ( ref pixel; PixelArray )
+    // ~~
+
+    void Resize(
+        IMAGE image
+        )
+    {
+        Resize( image.ColumnCount, image.LineCount );
+    }
+
+    // ~~
+
+    void Copy(
+        IMAGE image
+        )
+    {
+        Resize( image );
+
+        foreach ( pixel_index, ref pixel; PixelArray )
         {
-            pixel.Binarize( minimum_luminance );
+            pixel = image.PixelArray[ pixel_index ];
         }
     }
 
     // ~~
 
-    void Invert(
+    void Fill(
         )
     {
-        writeln( "Inverting image" );
-
         foreach ( ref pixel; PixelArray )
         {
-            pixel.Invert();
+            pixel.Opacity = 255;
         }
     }
+
+    // ~~
+
+    void MakeStampImage(
+        IMAGE image,
+        long rotation_index,
+        long rotation_count
+        )
+    {
+        long
+            column_index,
+            line_index,
+            opacity,
+            sub_pixel_column_index,
+            sub_pixel_line_index;
+        double
+            rotation_angle,
+            rotation_step;
+        VECTOR_2
+            half_size_vector,
+            position_vector,
+            rotated_half_size_vector;
+
+        if ( image.LineCount == image.ColumnCount )
+        {
+            rotation_count *= 2;
+        }
+
+        if ( rotation_index * 2 == rotation_count )
+        {
+            Resize( image.LineCount, image.ColumnCount );
+            Fill();
+        }
+        else
+        {
+            rotation_step = PI / rotation_count;
+            rotation_angle = rotation_step * rotation_index;
+
+            half_size_vector.X = image.ColumnCount * 0.5;
+            half_size_vector.Y = image.LineCount * 0.5;
+
+            position_vector.X = half_size_vector.X;
+            position_vector.Y = half_size_vector.Y;
+            position_vector.Rotate( rotation_angle );
+            rotated_half_size_vector.InflateVector( position_vector );
+
+            position_vector.X = -half_size_vector.X;
+            position_vector.Y = half_size_vector.Y;
+            position_vector.Rotate( rotation_angle );
+            rotated_half_size_vector.InflateVector( position_vector );
+
+            position_vector.X = half_size_vector.X;
+            position_vector.Y = -half_size_vector.Y;
+            position_vector.Rotate( rotation_angle );
+            rotated_half_size_vector.InflateVector( position_vector );
+
+            position_vector.X = -half_size_vector.X;
+            position_vector.Y = -half_size_vector.Y;
+            position_vector.Rotate( rotation_angle );
+            rotated_half_size_vector.InflateVector( position_vector );
+
+            Resize(
+                ( rotated_half_size_vector.X * 2.0 ).ceil().to!long(),
+                ( rotated_half_size_vector.Y * 2.0 ).ceil().to!long()
+                );
+
+            for ( line_index = 0;
+                  line_index < LineCount;
+                  ++line_index )
+            {
+                for ( column_index = 0;
+                      column_index < ColumnCount;
+                      ++column_index )
+                {
+                    opacity = 0;
+
+                    for ( sub_pixel_line_index = 0;
+                          sub_pixel_line_index < 4;
+                          ++sub_pixel_line_index )
+                    {
+                        for ( sub_pixel_column_index = 0;
+                              sub_pixel_column_index < 4;
+                              ++sub_pixel_column_index )
+                        {
+                            position_vector.X
+                                = ( column_index * 4 + sub_pixel_column_index * 0.2 + 0.1 ) * 0.25
+                                  - ColumnCount * 0.5;
+
+                            position_vector.Y
+                                = ( line_index * 4 + sub_pixel_line_index * 0.2 + 0.1 ) * 0.25
+                                  - LineCount * 0.5;
+
+                            position_vector.Rotate( -rotation_angle );
+
+                            if ( position_vector.X > -half_size_vector.X
+                                 && position_vector.X < half_size_vector.X
+                                 && position_vector.Y > -half_size_vector.Y
+                                 && position_vector.Y < half_size_vector.Y )
+                            {
+                                opacity
+                                    += image.GetOpacity(
+                                           ( position_vector.X + half_size_vector.X ).to!long(),
+                                           ( position_vector.Y + half_size_vector.Y ).to!long()
+                                           );
+                            }
+                        }
+                    }
+
+                    PixelArray[ GetPixelIndex( column_index, line_index ) ].SetOpacity( opacity / 16 );
+                }
+            }
+        }
+
+        if ( false )
+        {
+            WritePngFile(
+                "stamp_"
+                ~ image.ColumnCount.to!string()
+                ~ "_"
+                ~ image.LineCount.to!string()
+                ~ "_"
+                ~ rotation_index.to!string()
+                ~ "_"
+                ~ rotation_count.to!string()
+                ~ ".png"
+                );
+        }
+    }
+
+    // ~~
+
+    void AddStampImages(
+        ref IMAGE[] stamp_image_array,
+        string text
+        )
+    {
+        long
+            column_count,
+            line_count,
+            maximum_bad_pixel_count,
+            rotation_count,
+            rotation_index;
+        string[]
+            part_array;
+        IMAGE
+            stamp_image,
+            rotated_stamp_image;
+
+        writeln( "Adding stamp : ", text );
+
+        part_array = text.split( '@' );
+        text = part_array[ 0 ];
+
+        part_array = part_array[ 1 ].split( ':' );
+        maximum_bad_pixel_count = part_array[ 0 ].to!long();
+        rotation_count = part_array[ 1 ].to!long();
+
+        stamp_image = new IMAGE();
+
+        if ( text.endsWith( ".png" ) )
+        {
+            stamp_image.ReadPngFile( text );
+        }
+        else
+        {
+            part_array = text.split( '.' );
+            column_count = part_array[ 0 ].to!long();
+            line_count = part_array[ 1 ].to!long();
+
+            stamp_image.Resize( column_count, line_count );
+            stamp_image.Fill();
+        }
+
+        stamp_image.MaximumBadPixelCount = maximum_bad_pixel_count;
+        stamp_image_array ~= stamp_image;
+
+        for ( rotation_index = 1;
+              rotation_index < rotation_count;
+              ++rotation_index )
+        {
+            rotated_stamp_image = new IMAGE();
+            rotated_stamp_image.MakeStampImage( stamp_image, rotation_index, rotation_count );
+            rotated_stamp_image.MaximumBadPixelCount = maximum_bad_pixel_count;
+            stamp_image_array ~= rotated_stamp_image;
+        }
+    }
+
+    // ~~
+
+    void Trace(
+        long maximum_opacity_distance,
+        string[] stamp_definition_array
+        )
+    {
+        long
+            bad_pixel_count,
+            column_count,
+            column_index,
+            line_count,
+            line_index,
+            stamp_column_index,
+            stamp_line_index,
+            stamp_pixel_count,
+            matching_pixel_count;
+        IMAGE
+            traced_image;
+        IMAGE[]
+            stamp_image_array;
+        PIXEL
+            stamp_pixel,
+            pixel;
+
+        foreach ( stamp_definition_index, stamp_definition; stamp_definition_array )
+        {
+            AddStampImages( stamp_image_array, stamp_definition );
+        }
+
+        writeln( "Tracing image :" );
+        writeln( "    Maximum color distance : ", maximum_opacity_distance );
+        writeln( "    Stamp array : ", stamp_definition_array.join( ' ' ) );
+
+        traced_image = new IMAGE();
+        traced_image.Resize( this );
+
+        foreach ( stamp_image; stamp_image_array )
+        {
+            line_count = LineCount - stamp_image.LineCount + 1;
+            column_count = ColumnCount - stamp_image.ColumnCount + 1;
+
+            for ( line_index = 0;
+                  line_index < line_count;
+                  ++line_index )
+            {
+                for ( column_index = 0;
+                      column_index < column_count;
+                      ++column_index )
+                {
+                    stamp_pixel_count = 0;
+                    matching_pixel_count = 0;
+
+                    for ( stamp_line_index = 0;
+                          stamp_line_index < stamp_image.LineCount;
+                          ++stamp_line_index )
+                    {
+                        for ( stamp_column_index = 0;
+                              stamp_column_index < stamp_image.ColumnCount;
+                              ++stamp_column_index )
+                        {
+                            stamp_pixel = stamp_image.GetPixel( stamp_column_index, stamp_line_index );
+
+                            if ( stamp_pixel.Opacity > 0 )
+                            {
+                                ++stamp_pixel_count;
+
+                                pixel = GetPixel( column_index + stamp_column_index, line_index + stamp_line_index );
+
+                                if ( pixel.Opacity > 0
+                                     && pixel.Opacity + maximum_opacity_distance >= stamp_pixel.Opacity )
+                                {
+                                    ++matching_pixel_count;
+                                }
+                            }
+                        }
+                    }
+
+                    bad_pixel_count = stamp_pixel_count - matching_pixel_count;
+
+                    if ( bad_pixel_count <= stamp_image.MaximumBadPixelCount )
+                    {
+                        for ( stamp_line_index = 0;
+                              stamp_line_index < stamp_image.LineCount;
+                              ++stamp_line_index )
+                        {
+                            for ( stamp_column_index = 0;
+                                  stamp_column_index < stamp_image.ColumnCount;
+                                  ++stamp_column_index )
+                            {
+                                stamp_pixel = stamp_image.GetPixel( stamp_column_index, stamp_line_index );
+
+                                traced_image.TracePixel(
+                                    column_index + stamp_column_index,
+                                    line_index + stamp_line_index,
+                                    stamp_pixel
+                                    );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Copy( traced_image );
+    }
 }
+
 
 // ~~
 
@@ -498,7 +945,7 @@ struct POLYGON
     // ~~
 
     void Simplify(
-        double maximum_position_distance
+        double maximum_distance
         )
     {
         double
@@ -540,8 +987,8 @@ struct POLYGON
                   + position_vector.GetDistance( next_position_vector )
                   - prior_position_vector.GetDistance( next_position_vector );
 
-            if ( position_distance >= -maximum_position_distance
-                 && position_distance <= maximum_position_distance )
+            if ( position_distance >= -maximum_distance
+                 && position_distance <= maximum_distance )
             {
                 EdgeArray = EdgeArray[ 0 .. edge_index ] ~ EdgeArray[ edge_index + 1 .. $ ];
 
@@ -733,8 +1180,7 @@ class DRAWING
 
     void SetPoints(
         IMAGE image,
-        COLOR drawing_color,
-        long maximum_color_distance
+        long minimum_opacity
         )
     {
         long
@@ -765,7 +1211,7 @@ class DRAWING
                 point_index = GetPointIndex( column_index + 1, line_index + 1 );
 
                 PointArray[ point_index ].HasPixel
-                    = image.HasPixel( column_index, line_index, drawing_color, maximum_color_distance );
+                    = image.HasPixel( column_index, line_index, minimum_opacity );
             }
         }
 
@@ -817,7 +1263,7 @@ class DRAWING
         long column_index,
         long line_index,
         long direction,
-        double maximum_position_distance
+        double maximum_distance
         )
     {
         long
@@ -896,9 +1342,9 @@ class DRAWING
 
         polygon.Smooth();
 
-        if ( maximum_position_distance > 0.0 )
+        if ( maximum_distance > 0.0 )
         {
-            polygon.Simplify( maximum_position_distance );
+            polygon.Simplify( maximum_distance );
         }
 
         PolygonArray ~= polygon;
@@ -908,10 +1354,10 @@ class DRAWING
 
     void SetFromImage(
         IMAGE image,
-        COLOR drawing_color,
-        long maximum_color_distance,
-        double maximum_position_distance,
-        double line_width
+        long minimum_opacity,
+        double maximum_distance,
+        double line_width,
+        double polygon_height
         )
     {
         long
@@ -920,10 +1366,17 @@ class DRAWING
             line_index,
             point_index;
 
+        writeln( "Vectorizing image" );
+        writeln( "    Minimum opacity : ", minimum_opacity );
+        writeln( "    Maximum distance : ", maximum_distance );
+        writeln( "    Line width : ", line_width );
+        writeln( "    Polygon height : ", polygon_height );
+
         PixelSize = image.PixelSize;
         LineWidth = line_width;
+        PolygonHeight = polygon_height;
 
-        SetPoints( image, drawing_color, maximum_color_distance );
+        SetPoints( image, minimum_opacity );
 
         for ( line_index = 0;
               line_index < LineCount;
@@ -941,35 +1394,11 @@ class DRAWING
                 {
                     if ( PointArray[ point_index ].EdgeArray[ direction ].IsUnused() )
                     {
-                        AddPolygon( column_index, line_index, direction, maximum_position_distance );
+                        AddPolygon( column_index, line_index, direction, maximum_distance );
                     }
                 }
             }
         }
-    }
-
-    // ~~
-
-    void SetFromImage(
-        IMAGE image,
-        string drawing_color_text,
-        long maximum_color_distance,
-        double maximum_position_distance,
-        double line_width,
-        double polygon_height
-        )
-    {
-        COLOR
-            drawing_color;
-
-        writeln( "Vectorizing image" );
-        writeln( "    Drawing color : ", drawing_color_text );
-        writeln( "    Maximum color distance : ", maximum_color_distance );
-        writeln( "    Polygon height : ", polygon_height );
-
-        drawing_color.SetFromText( drawing_color_text );
-        SetFromImage( image, drawing_color, maximum_color_distance, maximum_position_distance, line_width );
-        PolygonHeight = polygon_height;
     }
 }
 
@@ -1249,40 +1678,46 @@ void main(
         }
 
         if ( option == "--read-png"
-             && argument_count == 2 )
+             && argument_count >= 1
+             && argument_count <= 6 )
         {
             image = new IMAGE();
             image.ReadPngFile(
                 argument_array[ 0 ],
-                argument_array[ 1 ].to!double()
+                ( argument_count > 1 ) ? argument_array[ 1 ].to!double() : 1.0,
+                ( argument_count > 2 ) ? argument_array[ 2 ].to!long() : 0,
+                ( argument_count > 3 ) ? argument_array[ 3 ].to!long() : 255,
+                ( argument_count > 4 ) ? argument_array[ 4 ].to!long() : 0,
+                ( argument_count > 5 ) ? argument_array[ 5 ].to!long() : 255
                 );
         }
-        else if ( option == "--binarize"
-                  && argument_count == 1
-                  && image !is null )
+        else if ( option == "--trace"
+                  && argument_count >= 2 )
         {
-            image.Binarize(
-                argument_array[ 0 ].to!long()
+            image.Trace(
+                argument_array[ 0 ].to!long(),
+                argument_array[ 1 .. argument_count ]
                 );
-        }
-        else if ( option == "--invert"
-                  && argument_count == 0
-                  && image !is null )
-        {
-            image.Invert();
         }
         else if ( option == "--vectorize"
-                  && argument_count == 5
+                  && argument_count == 4
                   && image !is null )
         {
             drawing = new DRAWING();
             drawing.SetFromImage(
                 image,
-                argument_array[ 0 ],
-                argument_array[ 1 ].to!long(),
+                argument_array[ 0 ].to!long(),
+                argument_array[ 1 ].to!double(),
                 argument_array[ 2 ].to!double(),
-                argument_array[ 3 ].to!double(),
-                argument_array[ 4 ].to!double()
+                argument_array[ 3 ].to!double()
+                );
+        }
+        else if ( option == "--write-png"
+                  && argument_count == 2 )
+        {
+            image.WritePngFile(
+                argument_array[ 0 ],
+                argument_array[ 1 ]
                 );
         }
         else if ( option == "--write-svg"
@@ -1316,11 +1751,10 @@ void main(
         writeln( "Usage :" );
         writeln( "    rez [options]" );
         writeln( "Options :" );
-        writeln( "    --read-png <image path> <pixel size>" );
-        writeln( "    --binarize <minimum luminance>" );
-        writeln( "    --invert" );
-        writeln( "    --vectorize <drawing color> <maximum color distance> <line width> <polygon height>" );
-        writeln( "    --simplify <maximum position distance>" );
+        writeln( "    --read-png <image path> [pixel size] [minimum luminance] [maximum luminance] [first luminance] [last luminance]" );
+        writeln( "    --trace <maximum opacity distance> <stamp definition> ..." );
+        writeln( "    --vectorize <minimum luminance> <maximum_position_distance> <line width> <polygon height>" );
+        writeln( "    --write-png <image path> <pixel color>" );
         writeln( "    --write-svg <drawing path>" );
         writeln( "    --write-obj <mesh path>" );
         writeln( "Examples :" );
