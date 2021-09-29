@@ -287,8 +287,6 @@ class IMAGE
         LineCount;
     PIXEL[]
         PixelArray;
-    double
-        PixelSize;
     long
         MaximumBadPixelCount;
 
@@ -429,7 +427,6 @@ class IMAGE
 
     void ReadPngFile(
         string file_path,
-        double pixel_size = 1.0,
         long minimum_luminance = 0,
         long maximum_luminance = 255,
         long first_luminance = 0,
@@ -453,11 +450,9 @@ class IMAGE
         LineCount = true_color_image.height();
         ColumnCount = true_color_image.width();
         PixelArray.length = LineCount * ColumnCount;
-        PixelSize = pixel_size;
 
         writeln( "    Line count : ", LineCount );
         writeln( "    Column count : ", ColumnCount );
-        writeln( "    Pixel size : ", pixel_size );
         writeln( "    Minimum luminance : ", minimum_luminance );
         writeln( "    Maximum luminance : ", maximum_luminance );
         writeln( "    First luminance : ", first_luminance );
@@ -1016,8 +1011,6 @@ class DRAWING
 {
     // -- ATTRIBUTES
 
-    double
-        PixelSize;
     long
         ColumnCount,
         LineCount;
@@ -1098,14 +1091,15 @@ class DRAWING
 
     VECTOR_3 GetPositionVector(
         ref EDGE edge,
+        double pixel_size,
         double height
         )
     {
         VECTOR_3
             position_vector;
 
-        position_vector.X = ( edge.PositionVector.X - ( ColumnCount - 1 ).to!double() * 0.5 ) * PixelSize;
-        position_vector.Y = -( edge.PositionVector.Y - ( LineCount - 1 ).to!double() * 0.5 ) * PixelSize;
+        position_vector.X = ( edge.PositionVector.X - ( ColumnCount - 1 ).to!double() * 0.5 ) * pixel_size;
+        position_vector.Y = -( edge.PositionVector.Y - ( LineCount - 1 ).to!double() * 0.5 ) * pixel_size;
         position_vector.Z = height;
 
         return position_vector;
@@ -1387,8 +1381,6 @@ class DRAWING
         writeln( "    Minimum opacity : ", minimum_opacity );
         writeln( "    Maximum distance : ", maximum_distance );
 
-        PixelSize = image.PixelSize;
-
         SetPoints( image, minimum_opacity );
 
         for ( line_index = 0;
@@ -1526,6 +1518,7 @@ class MESH
 
     void SetFromDrawing(
         DRAWING drawing,
+        double pixel_size,
         double edge_height
         )
     {
@@ -1546,10 +1539,10 @@ class MESH
                     second_edge_index = 0;
                 }
 
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], 0.0 ) );
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], 0.0 ) );
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], edge_height ) );
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], edge_height) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], pixel_size, 0.0 ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], pixel_size, 0.0 ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], pixel_size, edge_height ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], pixel_size, edge_height) );
 
                 PositionVectorIndexArray ~= -1;
             }
@@ -1705,16 +1698,15 @@ void main(
 
         if ( option == "--read-png"
              && argument_count >= 1
-             && argument_count <= 6 )
+             && argument_count <= 5 )
         {
             image = new IMAGE();
             image.ReadPngFile(
                 argument_array[ 0 ],
-                ( argument_count > 1 ) ? argument_array[ 1 ].to!double() : 1.0,
-                ( argument_count > 2 ) ? argument_array[ 2 ].to!long() : 0,
-                ( argument_count > 3 ) ? argument_array[ 3 ].to!long() : 255,
-                ( argument_count > 4 ) ? argument_array[ 4 ].to!long() : 0,
-                ( argument_count > 5 ) ? argument_array[ 5 ].to!long() : 255
+                ( argument_count > 1 ) ? argument_array[ 1 ].to!long() : 0,
+                ( argument_count > 2 ) ? argument_array[ 2 ].to!long() : 255,
+                ( argument_count > 3 ) ? argument_array[ 3 ].to!long() : 0,
+                ( argument_count > 4 ) ? argument_array[ 4 ].to!long() : 255
                 );
         }
         else if ( option == "--trace"
@@ -1758,13 +1750,14 @@ void main(
         }
         else if ( option == "--write-obj"
                   && argument_count >= 1
-                  && argument_count <= 2
+                  && argument_count <= 3
                   && drawing !is null )
         {
             mesh = new MESH();
             mesh.SetFromDrawing(
                 drawing,
-                ( argument_count > 1 ) ? argument_array[ 1 ].to!double() : 2.5
+                ( argument_count > 1 ) ? argument_array[ 1 ].to!double() : 0.01,
+                ( argument_count > 2 ) ? argument_array[ 2 ].to!double() : 2.5
                 );
             mesh.WriteObjFile(
                 argument_array[ 0 ]
@@ -1790,7 +1783,7 @@ void main(
         writeln( "    --write-svg <drawing path> [line width] [line color]" );
         writeln( "    --write-obj <mesh path> [wall height]" );
         writeln( "Examples :" );
-        writeln( "    rez --read-png test.png 0.01 --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 2.5" );
+        writeln( "    rez --read-png test.png --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 0.01 2.5" );
 
         Abort( "Invalid arguments : " ~ argument_array.to!string() );
     }

@@ -23,21 +23,27 @@ rez [options]
 ### Options
 
 ```bash
---read-png <image path> [pixel size] [minimum luminance] [maximum luminance] [first luminance] [last luminance] : read an image in PNG format
+--read-png <image path> [minimum luminance] [maximum luminance] [first luminance] [last luminance] : read an image in PNG format
 --trace <maximum opacity distance> <stamp definition> ... : trace the lines
 --vectorize <minimum luminance> <maximum position distance> : vectorize the edges
 --write-png <image path> [pixel color] : write the image in PNG format
 --write-svg <drawing path> [line width] [line color] : write the edges in SVG format
---write-obj <mesh path> [edge height] : write the edges in OBJ format
+--write-obj <mesh path> [pixel size] [edge height] : write the edges in OBJ format
 ```
 
 ### Examples
 
 ```bash
-rez --read-png test.png 0.01 --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 2.5
+rez --read-png test.png 64 255 --trace 128 4.12@3:2 --write-png OUT/test.png
 ```
 
-Vectorize an image and save the edges in SVG and OBJ format.
+Trace the lines of an image and write them in PNG format.
+
+```bash
+rez --read-png test.png --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 0.01 2.5
+```
+
+Vectorize the edges of an image and write them in SVG and OBJ format.
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint.png)
 
