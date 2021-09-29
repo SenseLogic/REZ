@@ -28,7 +28,7 @@ rez [options]
 --vectorize <minimum luminance> <maximum position distance> : vectorize the edges
 --write-png <image path> [pixel color] : write the image in PNG format
 --write-svg <drawing path> [line width] [line color] : write the edges in SVG format
---write-obj <mesh path> [edge height] : write the edges in SVG format
+--write-obj <mesh path> [edge height] : write the edges in OBJ format
 ```
 
 ### Examples
