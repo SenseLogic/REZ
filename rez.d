@@ -152,6 +152,18 @@ struct COLOR
         Blue,
         Alpha = 255;
 
+    // -- INQUIRIES
+
+    string GetHexadecimalText(
+        )
+    {
+        return
+            Red.GetHexadecimalText()
+            ~ Green.GetHexadecimalText()
+            ~ Blue.GetHexadecimalText()
+            ~ Alpha.GetHexadecimalText();
+    }
+
     // -- OPERATIONS
 
     void SetFromText(
@@ -1005,8 +1017,7 @@ class DRAWING
     // -- ATTRIBUTES
 
     double
-        PixelSize,
-        LineWidth;
+        PixelSize;
     long
         ColumnCount,
         LineCount;
@@ -1014,8 +1025,6 @@ class DRAWING
         PointArray;
     POLYGON[]
         PolygonArray;
-    double
-        PolygonHeight;
 
     // -- INQUIRIES
 
@@ -1105,17 +1114,25 @@ class DRAWING
     // ~~
 
     void WriteSvgFile(
-        string file_path
+        string file_path,
+        double line_width,
+        string line_color_text
         )
     {
         long
             edge_index;
         File
             file;
+        COLOR
+            line_color;
         EDGE
             edge;
 
         writeln( "Writing drawing : ", file_path );
+        writeln( "    Line width : ", line_width );
+        writeln( "    Line color : ", line_color_text );
+
+        line_color.SetFromText( line_color_text );
 
         try
         {
@@ -1159,8 +1176,10 @@ class DRAWING
                 }
 
                 file.write(
-                    " Z\" stroke=\"#000\" stroke-width=\""
-                    ~ LineWidth.GetText()
+                    " Z\" stroke=\"#"
+                    ~ line_color.GetHexadecimalText()
+                    ~ "\" stroke-width=\""
+                    ~ line_width.GetText()
                     ~ "\" fill=\"none\"/>\n"
                     );
             }
@@ -1355,9 +1374,7 @@ class DRAWING
     void SetFromImage(
         IMAGE image,
         long minimum_opacity,
-        double maximum_distance,
-        double line_width,
-        double polygon_height
+        double maximum_distance
         )
     {
         long
@@ -1369,12 +1386,8 @@ class DRAWING
         writeln( "Vectorizing image" );
         writeln( "    Minimum opacity : ", minimum_opacity );
         writeln( "    Maximum distance : ", maximum_distance );
-        writeln( "    Line width : ", line_width );
-        writeln( "    Polygon height : ", polygon_height );
 
         PixelSize = image.PixelSize;
-        LineWidth = line_width;
-        PolygonHeight = polygon_height;
 
         SetPoints( image, minimum_opacity );
 
@@ -1512,7 +1525,8 @@ class MESH
     // ~~
 
     void SetFromDrawing(
-        DRAWING drawing
+        DRAWING drawing,
+        double edge_height
         )
     {
         long
@@ -1534,8 +1548,8 @@ class MESH
 
                 AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], 0.0 ) );
                 AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], 0.0 ) );
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], drawing.PolygonHeight ) );
-                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], drawing.PolygonHeight ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ first_edge_index ], edge_height ) );
+                AddPositionVector( drawing.GetPositionVector( polygon.EdgeArray[ second_edge_index ], edge_height) );
 
                 PositionVectorIndexArray ~= -1;
             }
@@ -1587,6 +1601,18 @@ void Abort(
     PrintError( exception.msg );
 
     exit( -1 );
+}
+
+// ~~
+
+string GetHexadecimalText(
+    ubyte natural
+    )
+{
+    return
+        ""
+        ~ "0123456789ABCDEF"[ natural >> 4 ]
+        ~ "0123456789ABCDEF"[ natural & 15 ];
 }
 
 // ~~
@@ -1700,40 +1726,46 @@ void main(
                 );
         }
         else if ( option == "--vectorize"
-                  && argument_count == 4
+                  && argument_count == 2
                   && image !is null )
         {
             drawing = new DRAWING();
             drawing.SetFromImage(
                 image,
                 argument_array[ 0 ].to!long(),
-                argument_array[ 1 ].to!double(),
-                argument_array[ 2 ].to!double(),
-                argument_array[ 3 ].to!double()
+                argument_array[ 1 ].to!double()
                 );
         }
         else if ( option == "--write-png"
-                  && argument_count == 2 )
+                  && argument_count >= 1
+                  && argument_count <= 2 )
         {
             image.WritePngFile(
                 argument_array[ 0 ],
-                argument_array[ 1 ]
+                ( argument_count > 1 ) ? argument_array[ 1 ] : "255.255.255.255"
                 );
         }
         else if ( option == "--write-svg"
-                  && argument_count == 1
+                  && argument_count >= 1
+                  && argument_count <= 3
                   && drawing !is null )
         {
             drawing.WriteSvgFile(
-                argument_array[ 0 ]
+                argument_array[ 0 ],
+                ( argument_count > 1 ) ? argument_array[ 1 ].to!double() : 1.0,
+                ( argument_count > 2 ) ? argument_array[ 2 ] : "0.0.0.255"
                 );
         }
         else if ( option == "--write-obj"
-                  && argument_count == 1
+                  && argument_count >= 1
+                  && argument_count <= 2
                   && drawing !is null )
         {
             mesh = new MESH();
-            mesh.SetFromDrawing( drawing );
+            mesh.SetFromDrawing(
+                drawing,
+                ( argument_count > 1 ) ? argument_array[ 1 ].to!double() : 2.5
+                );
             mesh.WriteObjFile(
                 argument_array[ 0 ]
                 );
@@ -1753,12 +1785,12 @@ void main(
         writeln( "Options :" );
         writeln( "    --read-png <image path> [pixel size] [minimum luminance] [maximum luminance] [first luminance] [last luminance]" );
         writeln( "    --trace <maximum opacity distance> <stamp definition> ..." );
-        writeln( "    --vectorize <minimum luminance> <maximum_position_distance> <line width> <polygon height>" );
-        writeln( "    --write-png <image path> <pixel color>" );
-        writeln( "    --write-svg <drawing path>" );
-        writeln( "    --write-obj <mesh path>" );
+        writeln( "    --vectorize <minimum luminance> <maximum position distance>" );
+        writeln( "    --write-png <image path> [pixel color]" );
+        writeln( "    --write-svg <drawing path> [line width] [line color]" );
+        writeln( "    --write-obj <mesh path> [wall height]" );
         writeln( "Examples :" );
-        writeln( "    rez --read-png test.png 0.01 --vectorize 255.255.255 128 0.5 1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj" );
+        writeln( "    rez --read-png test.png 0.01 --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 2.5" );
 
         Abort( "Invalid arguments : " ~ argument_array.to!string() );
     }

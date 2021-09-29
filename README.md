@@ -2,7 +2,7 @@
 
 # Rez
 
-Raster image line vectorizer.
+Raster image edge vectorizer.
 
 ## Installation
 
@@ -25,19 +25,19 @@ rez [options]
 ```bash
 --read-png <image path> [pixel size] [minimum luminance] [maximum luminance] [first luminance] [last luminance] : read an image in PNG format
 --trace <maximum opacity distance> <stamp definition> ... : trace the lines
---vectorize <minimum luminance> <maximum_position_distance> <line width> <polygon height>" : vectorize the line edges
---write-png <image path> <pixel color> : write the image in PNG format
---write-svg <drawing path>" : write the line edges in SVG format
---write-obj <mesh path>" : write the line walls in SVG format
+--vectorize <minimum luminance> <maximum position distance> : vectorize the edges
+--write-png <image path> [pixel color] : write the image in PNG format
+--write-svg <drawing path> [line width] [line color] : write the line edges in SVG format
+--write-obj <mesh path> [edge height] : write the line edges in SVG format
 ```
 
 ### Examples
 
 ```bash
-rez --read-png test.png 0.01 --vectorize 128 0.5 1 2.5 --write-svg OUT/test.svg --write-obj OUT/test.obj
+rez --read-png test.png 0.01 --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 2.5
 ```
 
-Vectorize an image and save the line edges in SVG format and the line walls in OBJ format.
+Vectorize an image and save the edges in SVG and OBJ format.
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint.png)
 
