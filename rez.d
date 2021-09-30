@@ -68,25 +68,29 @@ struct VECTOR_2
 
     // ~~
 
-    void InflateVector(
-        VECTOR_2 vector
+    void ExtendInterval(
+        ref VECTOR_2 minimum_vector,
+        ref VECTOR_2 maximum_vector
         )
     {
-        double
-            minimum_x,
-            minimum_y;
-
-        minimum_x = vector.X.abs();
-        minimum_y = vector.Y.abs();
-
-        if ( X < minimum_x )
+        if ( X < minimum_vector.X )
         {
-            X = minimum_x;
+            minimum_vector.X = X;
         }
 
-        if ( Y < minimum_y )
+        if ( X > maximum_vector.X )
         {
-            Y = minimum_y;
+            maximum_vector.X = X;
+        }
+
+        if ( Y < minimum_vector.Y )
+        {
+            minimum_vector.Y = Y;
+        }
+
+        if ( Y > maximum_vector.Y )
+        {
+            maximum_vector.Y = Y;
         }
     }
 
@@ -539,96 +543,89 @@ class IMAGE
             rotation_step;
         VECTOR_2
             half_size_vector,
-            position_vector,
-            rotated_half_size_vector;
+            maximum_position_vector,
+            minimum_position_vector,
+            position_vector;
 
         if ( image.LineCount == image.ColumnCount )
         {
             rotation_count *= 2;
         }
 
-        if ( rotation_index * 2 == rotation_count )
+        rotation_step = PI / rotation_count;
+        rotation_angle = rotation_step * rotation_index;
+
+        half_size_vector.X = image.ColumnCount * 0.5;
+        half_size_vector.Y = image.LineCount * 0.5;
+
+        position_vector.X = half_size_vector.X - 0.1;
+        position_vector.Y = half_size_vector.Y - 0.1;
+        position_vector.Rotate( rotation_angle );
+        position_vector.ExtendInterval( minimum_position_vector, maximum_position_vector );
+
+        position_vector.X = -half_size_vector.X + 0.1;
+        position_vector.Y = half_size_vector.Y - 0.1;
+        position_vector.Rotate( rotation_angle );
+        position_vector.ExtendInterval( minimum_position_vector, maximum_position_vector );
+
+        position_vector.X = half_size_vector.X - 0.1;
+        position_vector.Y = -half_size_vector.Y + 0.1;
+        position_vector.Rotate( rotation_angle );
+        position_vector.ExtendInterval( minimum_position_vector, maximum_position_vector );
+
+        position_vector.X = -half_size_vector.X + 0.1;
+        position_vector.Y = -half_size_vector.Y + 0.1;
+        position_vector.Rotate( rotation_angle );
+        position_vector.ExtendInterval( minimum_position_vector, maximum_position_vector );
+
+        Resize(
+            ( maximum_position_vector.X.floor() - minimum_position_vector.X.floor() ).to!long() + 1,
+            ( maximum_position_vector.Y.floor() - minimum_position_vector.Y.floor() ).to!long() + 1
+            );
+
+        for ( line_index = 0;
+              line_index < LineCount;
+              ++line_index )
         {
-            Resize( image.LineCount, image.ColumnCount );
-            Fill();
-        }
-        else
-        {
-            rotation_step = PI / rotation_count;
-            rotation_angle = rotation_step * rotation_index;
-
-            half_size_vector.X = image.ColumnCount * 0.5;
-            half_size_vector.Y = image.LineCount * 0.5;
-
-            position_vector.X = half_size_vector.X;
-            position_vector.Y = half_size_vector.Y;
-            position_vector.Rotate( rotation_angle );
-            rotated_half_size_vector.InflateVector( position_vector );
-
-            position_vector.X = -half_size_vector.X;
-            position_vector.Y = half_size_vector.Y;
-            position_vector.Rotate( rotation_angle );
-            rotated_half_size_vector.InflateVector( position_vector );
-
-            position_vector.X = half_size_vector.X;
-            position_vector.Y = -half_size_vector.Y;
-            position_vector.Rotate( rotation_angle );
-            rotated_half_size_vector.InflateVector( position_vector );
-
-            position_vector.X = -half_size_vector.X;
-            position_vector.Y = -half_size_vector.Y;
-            position_vector.Rotate( rotation_angle );
-            rotated_half_size_vector.InflateVector( position_vector );
-
-            Resize(
-                ( rotated_half_size_vector.X * 2.0 ).ceil().to!long(),
-                ( rotated_half_size_vector.Y * 2.0 ).ceil().to!long()
-                );
-
-            for ( line_index = 0;
-                  line_index < LineCount;
-                  ++line_index )
+            for ( column_index = 0;
+                  column_index < ColumnCount;
+                  ++column_index )
             {
-                for ( column_index = 0;
-                      column_index < ColumnCount;
-                      ++column_index )
+                opacity = 0;
+
+                for ( sub_pixel_line_index = 0;
+                      sub_pixel_line_index < 4;
+                      ++sub_pixel_line_index )
                 {
-                    opacity = 0;
-
-                    for ( sub_pixel_line_index = 0;
-                          sub_pixel_line_index < 4;
-                          ++sub_pixel_line_index )
+                    for ( sub_pixel_column_index = 0;
+                          sub_pixel_column_index < 4;
+                          ++sub_pixel_column_index )
                     {
-                        for ( sub_pixel_column_index = 0;
-                              sub_pixel_column_index < 4;
-                              ++sub_pixel_column_index )
+                        position_vector.X
+                            = column_index + sub_pixel_column_index * 0.25 + 0.125
+                              - ColumnCount * 0.5;
+
+                        position_vector.Y
+                            = line_index + sub_pixel_line_index * 0.25 + 0.125
+                              - LineCount * 0.5;
+
+                        position_vector.Rotate( -rotation_angle );
+
+                        if ( position_vector.X >= -half_size_vector.X
+                             && position_vector.X <= half_size_vector.X
+                             && position_vector.Y >= -half_size_vector.Y
+                             && position_vector.Y <= half_size_vector.Y )
                         {
-                            position_vector.X
-                                = ( column_index * 4 + sub_pixel_column_index * 0.2 + 0.1 ) * 0.25
-                                  - ColumnCount * 0.5;
-
-                            position_vector.Y
-                                = ( line_index * 4 + sub_pixel_line_index * 0.2 + 0.1 ) * 0.25
-                                  - LineCount * 0.5;
-
-                            position_vector.Rotate( -rotation_angle );
-
-                            if ( position_vector.X > -half_size_vector.X
-                                 && position_vector.X < half_size_vector.X
-                                 && position_vector.Y > -half_size_vector.Y
-                                 && position_vector.Y < half_size_vector.Y )
-                            {
-                                opacity
-                                    += image.GetOpacity(
-                                           ( position_vector.X + half_size_vector.X ).to!long(),
-                                           ( position_vector.Y + half_size_vector.Y ).to!long()
-                                           );
-                            }
+                            opacity
+                                += image.GetOpacity(
+                                       ( position_vector.X + half_size_vector.X ).floor().to!long(),
+                                       ( position_vector.Y + half_size_vector.Y ).floor().to!long()
+                                       );
                         }
                     }
-
-                    PixelArray[ GetPixelIndex( column_index, line_index ) ].SetOpacity( opacity / 16 );
                 }
+
+                PixelArray[ GetPixelIndex( column_index, line_index ) ].SetOpacity( opacity / 16 );
             }
         }
 
@@ -1776,13 +1773,14 @@ void main(
         writeln( "Usage :" );
         writeln( "    rez [options]" );
         writeln( "Options :" );
-        writeln( "    --read-png <image path> [pixel size] [minimum luminance] [maximum luminance] [first luminance] [last luminance]" );
+        writeln( "    --read-png <image path> [minimum luminance] [maximum luminance] [first luminance] [last luminance]" );
         writeln( "    --trace <maximum opacity distance> <stamp definition> ..." );
         writeln( "    --vectorize <minimum luminance> <maximum position distance>" );
         writeln( "    --write-png <image path> [pixel color]" );
         writeln( "    --write-svg <drawing path> [line width] [line color]" );
-        writeln( "    --write-obj <mesh path> [wall height]" );
+        writeln( "    --write-obj <mesh path> [pixel size] [edge height]" );
         writeln( "Examples :" );
+        writeln( "    rez --read-png test.png 64 255 255 0 --trace 128 4.12@3:2 --write-png OUT/test.png" );
         writeln( "    rez --read-png test.png --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 0.01 2.5" );
 
         Abort( "Invalid arguments : " ~ argument_array.to!string() );

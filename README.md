@@ -34,7 +34,7 @@ rez [options]
 ### Examples
 
 ```bash
-rez --read-png test.png 64 255 --trace 128 4.12@3:2 --write-png OUT/test.png
+rez --read-png test.png 64 255 255 0 --trace 128 4.12@3:2 --write-png OUT/test.png
 ```
 
 Trace the lines of an image and write them in PNG format.
