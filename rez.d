@@ -542,6 +542,7 @@ class IMAGE
             rotation_angle,
             rotation_step;
         VECTOR_2
+            center_position_vector,
             half_size_vector,
             maximum_position_vector,
             minimum_position_vector,
@@ -583,6 +584,9 @@ class IMAGE
             ( maximum_position_vector.Y.floor() - minimum_position_vector.Y.floor() ).to!long() + 1
             );
 
+        center_position_vector.X = ColumnCount * 0.5;
+        center_position_vector.Y = LineCount * 0.5;
+
         for ( line_index = 0;
               line_index < LineCount;
               ++line_index )
@@ -603,11 +607,11 @@ class IMAGE
                     {
                         position_vector.X
                             = column_index + sub_pixel_column_index * 0.25 + 0.125
-                              - ColumnCount * 0.5;
+                              - center_position_vector.X;
 
                         position_vector.Y
                             = line_index + sub_pixel_line_index * 0.25 + 0.125
-                              - LineCount * 0.5;
+                              - center_position_vector.Y;
 
                         position_vector.Rotate( -rotation_angle );
 
