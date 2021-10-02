@@ -1,6 +1,7 @@
 #!/bin/sh
 set -x
-../rez --read-png scan.png 64 255 255 0 --trace 128 4.12@3:2 --write-png OUT/scan.png
+..\rez --read-png scan.png 64 255 255 0 --trace 128 4.12@3:2 --write-png OUT/scan.png
+..\rez --read-png scan.png 64 255 255 0 --trace 128 4.12@0:4/180 --binarize 128 --write-masks OUT/scan_mask_ --write-png OUT/scan_2.png
 ../rez --read-png dot.png --vectorize 128 0 --write-svg OUT/dot.svg 0.1 --write-obj OUT/dot.obj 1 2.5
 ../rez --read-png square.png --vectorize 128 0 --write-svg OUT/square.svg 0.1 --write-obj OUT/square.obj 1 2.5
 ../rez --read-png thin_line.png --vectorize 128 0 --write-svg OUT/thin_line.svg 0.1 --write-obj OUT/thin_line.obj 1 2.5

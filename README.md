@@ -24,11 +24,18 @@ rez [options]
 
 ```bash
 --read-png <image path> [minimum luminance] [maximum luminance] [first luminance] [last luminance] : read an image in PNG format
---trace <maximum opacity distance> <stamp definition> ... : trace the lines
+--binarize <minimum luminance> : binarize the image
+--trace <maximum luminance distance> <mask definition> ... : trace the lines
 --vectorize <minimum luminance> <maximum position distance> : vectorize the edges
 --write-png <image path> [pixel color] : write the image in PNG format
 --write-svg <drawing path> [line width] [line color] : write the edges in SVG format
 --write-obj <mesh path> [pixel size] [edge height] : write the edges in OBJ format
+```
+
+### Mask definition
+
+```bash
+<image path|width.height>@[maximum bad pixel count]:[rotation count]/[rotation angle]
 ```
 
 ### Examples
