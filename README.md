@@ -44,13 +44,13 @@ rez [options]
 rez --read-png test.png 64 255 255 0 --trace 128 4.12@3:2 --write-png OUT/test.png
 ```
 
-Trace the lines of an image and write them in PNG format.
+Traces the lines of an image and writes them in PNG format.
 
 ```bash
 rez --read-png test.png --vectorize 128 0.5 --write-svg OUT/test.svg 1 --write-obj OUT/test.obj 0.01 2.5
 ```
 
-Vectorize the edges of an image and write them in SVG and OBJ format.
+Vectorizes the edges of an image and writes them in SVG and OBJ format.
 
 ![](https://github.com/senselogic/REZ/blob/master/SCREENSHOT/blueprint.png)
 
