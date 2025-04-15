@@ -26,18 +26,111 @@
 +/
 module arsd.core;
 
+
+static if(__traits(compiles, () { import core.interpolation; })) {
+	import core.interpolation;
+
+	alias InterpolationHeader    = core.interpolation.InterpolationHeader;
+	alias InterpolationFooter    = core.interpolation.InterpolationFooter;
+	alias InterpolatedLiteral    = core.interpolation.InterpolatedLiteral;
+	alias InterpolatedExpression = core.interpolation.InterpolatedExpression;
+} else {
+	// polyfill for old versions
+	struct InterpolationHeader {}
+	struct InterpolationFooter {}
+	struct InterpolatedLiteral(string literal) {}
+	struct InterpolatedExpression(string code) {}
+}
+
+version(use_arsd_core)
+	enum use_arsd_core = true;
+else
+	enum use_arsd_core = false;
+
+import core.attribute;
+static if(__traits(hasMember, core.attribute, "implicit"))
+	alias implicit = core.attribute.implicit;
+else
+	enum implicit;
+
+static if(__traits(hasMember, core.attribute, "standalone"))
+	alias standalone = core.attribute.standalone;
+else
+	enum standalone;
+
+
+
 // FIXME: add callbacks on file open for tracing dependencies dynamically
 
 // see for useful info: https://devblogs.microsoft.com/dotnet/how-async-await-really-works/
 
 // see: https://wiki.openssl.org/index.php/Simple_TLS_Server
 
-import core.thread;
-import core.volatile;
-import core.atomic;
+// see: When you only want to track changes on a file or directory, be sure to open it using the O_EVTONLY flag.
+
+///ArsdUseCustomRuntime is used since other derived work from WebAssembly may be used and thus specified in the CLI
+version(Emscripten) {
+	version = EmptyEventLoop;
+	version = EmptyCoreEvent;
+	version = HasTimer;
+} else version(WebAssembly) version = ArsdUseCustomRuntime;
+else
+
+// note that kqueue might run an i/o loop on mac, ios, etc. but then NSApp.run on the io thread
+// but on bsd, you want the kqueue loop in i/o too....
+
+version(ArsdUseCustomRuntime)
+{
+	version = UseStdioWriteln;
+}
+else
+{
+	version(D_OpenD) {
+		version(OSX)
+			version=OSXCocoa;
+		version(iOS)
+			version=OSXCocoa;
+	}
+
+	version = HasFile;
+	version = HasSocket;
+	version = HasThread;
+	import core.stdc.errno;
+
+	version(Windows)
+		version = HasTimer;
+	version(linux)
+		version = HasTimer;
+	version(OSXCocoa)
+		version = HasTimer;
+}
+
+version(HasThread)
+{
+	import core.thread;
+	import core.volatile;
+	import core.atomic;
+}
+else
+{
+	// polyfill for missing core.time
+	/*
+	struct Duration {
+		static Duration max() { return Duration(); }
+	}
+	struct MonoTime {}
+	*/
+}
+
 import core.time;
 
-import core.stdc.errno;
+version(OSXCocoa) {
+	version(ArsdNoCocoa)
+		enum bool UseCocoa = false;
+	else
+		enum bool UseCocoa = true;
+} else
+	enum bool UseCocoa = false;
 
 import core.attribute;
 static if(!__traits(hasMember, core.attribute, "mustuse"))
@@ -46,7 +139,13 @@ static if(!__traits(hasMember, core.attribute, "mustuse"))
 // FIXME: add an arena allocator? can do task local destruction maybe.
 
 // the three implementations are windows, epoll, and kqueue
-version(Windows) {
+
+version(Emscripten)  {
+	import core.stdc.errno;
+	import core.atomic;
+	import core.volatile;
+
+} else version(Windows) {
 	version=Arsd_core_windows;
 
 	// import core.sys.windows.windows;
@@ -68,6 +167,13 @@ version(Windows) {
 	version=Arsd_core_kqueue;
 
 	import core.sys.freebsd.sys.event;
+
+	// the version in druntime doesn't have the default arg making it a pain to use when the freebsd
+	// version adds a new field
+	extern(D) void EV_SET(kevent_t* kevp, typeof(kevent_t.tupleof) args = kevent_t.tupleof.init)
+	{
+	    *kevp = kevent_t(args);
+	}
 } else version(DragonFlyBSD) {
 	// NOT ACTUALLY TESTED
 	version=Arsd_core_kqueue;
@@ -87,15 +193,40 @@ version(Windows) {
 	version=Arsd_core_kqueue;
 
 	import core.sys.darwin.sys.event;
+} else version(iOS) {
+	version=Arsd_core_kqueue;
+
+	import core.sys.darwin.sys.event;
+}
+
+// FIXME: pragma(linkerDirective, "-framework", "Cocoa") works in ldc
+static if(UseCocoa)
+	enum CocoaAvailable = true;
+else
+	enum CocoaAvailable = false;
+
+version(D_OpenD) {
+	static if(UseCocoa) {
+		pragma(linkerDirective, "-framework", "Cocoa");
+		pragma(linkerDirective, "-framework", "QuartzCore");
+	}
+} else {
+	static if(UseCocoa)
+	version(LDC) {
+		pragma(linkerDirective, "-framework", "Cocoa");
+		pragma(linkerDirective, "-framework", "QuartzCore");
+	}
 }
 
 version(Posix) {
 	import core.sys.posix.signal;
 	import core.sys.posix.unistd;
 
+	version(Emscripten) {} else {
 	import core.sys.posix.sys.un;
 	import core.sys.posix.sys.socket;
 	import core.sys.posix.netinet.in_;
+	}
 }
 
 // FIXME: the exceptions should actually give some explanatory text too (at least sometimes)
@@ -105,6 +236,159 @@ version(Posix) {
 	GENERAL UTILITY FUNCTIONS
 	=========================
 +/
+
+/++
+	Casts value `v` to type `T`.
+
+	$(TIP
+		This is a helper function for readability purposes.
+		The idea is to make type-casting as accessible as `to()` from `std.conv`.
+	)
+
+	---
+	int i =  cast(int)(foo * bar);
+	int i = castTo!int(foo * bar);
+
+	int j = cast(int) round(floatValue);
+	int j = round(floatValue).castTo!int;
+
+	int k = cast(int) floatValue  + foobar;
+	int k = floatValue.castTo!int + foobar;
+
+	auto m = Point(
+		cast(int) calc(a.x, b.x),
+		cast(int) calc(a.y, b.y),
+	);
+	auto m = Point(
+		calc(a.x, b.x).castTo!int,
+		calc(a.y, b.y).castTo!int,
+	);
+	---
+
+	History:
+		Added on April 24, 2024.
+		Renamed from `typeCast` to `castTo` on May 24, 2024.
+ +/
+auto ref T castTo(T, S)(auto ref S v) {
+	return cast(T) v;
+}
+
+///
+alias typeCast = castTo;
+
+/++
+	Treats the memory of one variable as if it is the type of another variable.
+
+	History:
+		Added January 20, 2025
++/
+ref T reinterpretCast(T, V)(return ref V value) @system {
+	return *cast(T*)& value;
+}
+
+/++
+	Determines whether `needle` is a slice of `haystack`.
+
+	History:
+		Added on February 11, 2025.
+ +/
+bool isSliceOf(T1, T2)(scope const(T1)[] needle, scope const(T2)[] haystack) @trusted pure nothrow @nogc {
+	return (
+		needle.ptr >= haystack.ptr
+		&& ((needle.ptr + needle.length) <= (haystack.ptr + haystack.length))
+	);
+}
+
+///
+@safe unittest {
+	string        s0 = "01234";
+	const(char)[] s1 = s0[1 .. $];
+	const(void)[] s2 = s1.castTo!(const(void)[]);
+	string        s3 = s1.idup;
+
+	assert( s0.isSliceOf(s0));
+	assert( s1.isSliceOf(s0));
+	assert( s2.isSliceOf(s0));
+	assert(!s3.isSliceOf(s0));
+
+	assert(!s0.isSliceOf(s1));
+	assert( s1.isSliceOf(s1));
+	assert( s2.isSliceOf(s1));
+	assert(!s3.isSliceOf(s1));
+
+	assert(!s0.isSliceOf(s2));
+	assert( s1.isSliceOf(s2));
+	assert( s2.isSliceOf(s2));
+	assert(!s3.isSliceOf(s2));
+
+	assert(!s0.isSliceOf(s3));
+	assert(!s1.isSliceOf(s3));
+	assert(!s2.isSliceOf(s3));
+	assert( s3.isSliceOf(s3));
+
+	assert(s1.length == 4);
+	assert(s1[0 .. 0].isSliceOf(s1));
+	assert(s1[0 .. 1].isSliceOf(s1));
+	assert(s1[1 .. 2].isSliceOf(s1));
+	assert(s1[1 .. 3].isSliceOf(s1));
+	assert(s1[1 .. $].isSliceOf(s1));
+	assert(s1[$ .. $].isSliceOf(s1));
+}
+
+/++
+	Does math as a 64 bit number, but saturates at int.min and int.max when converting back to a 32 bit int.
+
+	History:
+		Added January 1, 2025
++/
+alias NonOverflowingInt = NonOverflowingIntBase!(int.min, int.max);
+
+/// ditto
+alias NonOverflowingUint = NonOverflowingIntBase!(0, int.max);
+
+/// ditto
+struct NonOverflowingIntBase(int min, int max) {
+	this(long v) {
+		this.value = v;
+	}
+
+	private long value;
+
+	NonOverflowingInt opBinary(string op)(long rhs) {
+		return NonOverflowingInt(mixin("this.value", op, "rhs"));
+	}
+	NonOverflowingInt opBinary(string op)(NonOverflowingInt rhs) {
+		return this.opBinary!op(rhs.value);
+	}
+	NonOverflowingInt opUnary(string op)() {
+		return NonOverflowingInt(mixin(op, "this.value"));
+	}
+	NonOverflowingInt opOpAssign(string op)(long rhs) {
+		return this = this.opBinary!(op)(rhs);
+	}
+	NonOverflowingInt opOpAssign(string op)(NonOverflowingInt rhs) {
+		return this = this.opBinary!(op)(rhs.value);
+	}
+
+	int getValue() const {
+		if(value < min)
+			return min;
+		else if(value > max)
+			return max;
+		return cast(int) value;
+	}
+
+	alias getValue this;
+}
+
+unittest {
+	assert(-5.NonOverflowingInt - int.max == int.min);
+	assert(-5.NonOverflowingInt + 5 == 0);
+
+	assert(NonOverflowingInt(5) + int.max - 5 == int.max);
+	assert(NonOverflowingInt(5) + int.max - int.max - 5 == 0); // it truncates at the end of the op chain, not at intermediates
+	assert(NonOverflowingInt(0) + int.max * 2L == int.max); // note the L there is required to pass since the order of operations means mul done before it gets to the NonOverflowingInt controls
+}
 
 // enum stringz : const(char)* { init = null }
 
@@ -131,7 +415,7 @@ struct stringz {
 	/++
 		Borrows a slice of the pointer up to (but not including) the zero terminator.
 	+/
-	const(char)[] borrow() const {
+	const(char)[] borrow() const @system {
 		if(raw is null)
 			return null;
 
@@ -143,22 +427,283 @@ struct stringz {
 	}
 }
 
+/+
 /++
-	A limited variant to hold just a few types. It is made for the use of packing a small amount of extra data into error messages.
+	A runtime tagged union, aka a sumtype.
+
+	History:
+		Added February 15, 2025
++/
+struct Union(T...) {
+	private uint contains_;
+	private union {
+		private T payload;
+	}
+
+	static foreach(index, type; T)
+	@implicit public this(type t) {
+		contains_ = index;
+		payload[index] = t;
+	}
+
+	bool contains(Part)() const {
+		static assert(indexFor!Part != -1);
+		return contains_ == indexFor!Part;
+	}
+
+	inout(Part) get(Part)() inout {
+		if(!contains!Part) {
+			throw new ArsdException!"Dynamic type mismatch"(indexFor!Part, contains_);
+		}
+		return payload[indexFor!Part];
+	}
+
+	private int indexFor(Part)() {
+		foreach(idx, thing; T)
+			static if(is(T == Part))
+				return idx;
+		return -1;
+	}
+}
++/
+
+/+
+	DateTime
+		year: 16 bits (-32k to +32k)
+		month: 4 bits
+		day: 5 bits
+
+		hour: 5 bits
+		minute: 6 bits
+		second: 6 bits
+
+		total: 25 bits + 17 bits = 42 bits
+
+		fractional seconds: 10 bits
+
+		accuracy flags: date_valid | time_valid = 2 bits
+
+		54 bits used, 8 bits remain. reserve 1 for signed.
+
+		would need 11 bits for minute-precise dt offset but meh.
++/
+
+/++
+	A packed date/time/datetime representation added for use with LimitedVariant.
+
+	You should probably not use this much directly, it is mostly an internal storage representation.
++/
+struct PackedDateTime {
+	private ulong packedData;
+
+	string toString() const {
+		char[64] buffer;
+		size_t pos;
+
+		if(hasDate) {
+			pos += intToString(year, buffer[pos .. $], IntToStringArgs().withPadding(4)).length;
+			buffer[pos++] = '-';
+			pos += intToString(month, buffer[pos .. $], IntToStringArgs().withPadding(2)).length;
+			buffer[pos++] = '-';
+			pos += intToString(day, buffer[pos .. $], IntToStringArgs().withPadding(2)).length;
+		}
+
+		if(hasTime) {
+			if(pos)
+				buffer[pos++] = 'T';
+
+			pos += intToString(hours, buffer[pos .. $], IntToStringArgs().withPadding(2)).length;
+			buffer[pos++] = ':';
+			pos += intToString(minutes, buffer[pos .. $], IntToStringArgs().withPadding(2)).length;
+			buffer[pos++] = ':';
+			pos += intToString(seconds, buffer[pos .. $], IntToStringArgs().withPadding(2)).length;
+			if(fractionalSeconds) {
+				buffer[pos++] = '.';
+				pos += intToString(fractionalSeconds, buffer[pos .. $], IntToStringArgs().withPadding(4)).length;
+			}
+		}
+
+		return buffer[0 .. pos].idup;
+	}
+
+	/++
+	+/
+	int fractionalSeconds() const { return getFromMask(00, 10); }
+	/// ditto
+	void fractionalSeconds(int a) {     setWithMask(a, 00, 10); }
+
+	/// ditto
+	int  seconds() const          { return getFromMask(10,  6); }
+	/// ditto
+	void seconds(int a)           {     setWithMask(a, 10,  6); }
+	/// ditto
+	int  minutes() const          { return getFromMask(16,  6); }
+	/// ditto
+	void minutes(int a)           {     setWithMask(a, 16,  6); }
+	/// ditto
+	int  hours() const            { return getFromMask(22,  5); }
+	/// ditto
+	void hours(int a)             {     setWithMask(a, 22,  5); }
+
+	/// ditto
+	int  day() const              { return getFromMask(27,  5); }
+	/// ditto
+	void day(int a)               {     setWithMask(a, 27,  5); }
+	/// ditto
+	int  month() const            { return getFromMask(32,  4); }
+	/// ditto
+	void month(int a)             {     setWithMask(a, 32,  4); }
+	/// ditto
+	int  year() const             { return getFromMask(36, 16); }
+	/// ditto
+	void year(int a)              {     setWithMask(a, 36, 16); }
+
+	/// ditto
+	bool hasTime() const          { return cast(bool) getFromMask(52,  1); }
+	/// ditto
+	void hasTime(bool a)          {     setWithMask(a, 52,  1); }
+	/// ditto
+	bool hasDate() const          { return cast(bool) getFromMask(53,  1); }
+	/// ditto
+	void hasDate(bool a)          {     setWithMask(a, 53,  1); }
+
+	private void setWithMask(int a, int bitOffset, int bitCount) {
+		auto mask = (1UL << bitCount) - 1;
+
+		packedData &= ~(mask << bitOffset);
+		packedData |= (a & mask) << bitOffset;
+	}
+
+	private int getFromMask(int bitOffset, int bitCount) const {
+		ulong packedData = this.packedData;
+		packedData >>= bitOffset;
+
+		ulong mask = (1UL << bitCount) - 1;
+
+		return cast(int) (packedData & mask);
+	}
+}
+
+unittest {
+	PackedDateTime dt;
+	dt.hours = 14;
+	dt.minutes = 30;
+	dt.seconds = 25;
+	dt.hasTime = true;
+
+	assert(dt.toString() == "14:30:25", dt.toString());
+
+	dt.hasTime = false;
+	dt.year = 2024;
+	dt.month = 5;
+	dt.day = 31;
+	dt.hasDate = true;
+
+	assert(dt.toString() == "2024-05-31", dt.toString());
+	dt.hasTime = true;
+	assert(dt.toString() == "2024-05-31T14:30:25", dt.toString());
+}
+
+/++
+	Basically a Phobos SysTime but standing alone as a simple 64 bit integer (but wrapped) for compatibility with LimitedVariant.
++/
+struct SimplifiedUtcTimestamp {
+	long timestamp;
+
+	string toString() const {
+		import core.stdc.time;
+		char[128] buffer;
+		auto ut = toUnixTime();
+		tm* t = gmtime(&ut);
+		if(t is null)
+			return "null time";
+
+		return buffer[0 .. strftime(buffer.ptr, buffer.length, "%Y-%m-%dT%H:%M:%SZ", t)].idup;
+	}
+
+	version(Windows)
+		alias time_t = int;
+
+	static SimplifiedUtcTimestamp fromUnixTime(time_t t) {
+		return SimplifiedUtcTimestamp(621_355_968_000_000_000L + t * 1_000_000_000L / 100);
+	}
+
+	time_t toUnixTime() const {
+		return cast(time_t) ((timestamp - 621_355_968_000_000_000L) / 1_000_000_0); // hnsec = 7 digits
+	}
+}
+
+unittest {
+	SimplifiedUtcTimestamp sut = SimplifiedUtcTimestamp.fromUnixTime(86_400);
+	assert(sut.toString() == "1970-01-02T00:00:00Z");
+}
+
+/++
+	A limited variant to hold just a few types. It is made for the use of packing a small amount of extra data into error messages and some transit across virtual function boundaries.
 +/
 /+
+	ALL OF THESE ARE SUBJECT TO CHANGE
+
 	* if length and ptr are both 0, it is null
 	* if ptr == 1, length is an integer
 	* if ptr == 2, length is an unsigned integer (suggest printing in hex)
 	* if ptr == 3, length is a combination of flags (suggest printing in binary)
 	* if ptr == 4, length is a unix permission thing (suggest printing in octal)
 	* if ptr == 5, length is a double float
+	* if ptr == 6, length is an Object ref (reinterpret casted to void*)
+
+	* if ptr == 7, length is a ticks count (from MonoTime)
+	* if ptr == 8, length is a utc timestamp (hnsecs)
+	* if ptr == 9, length is a duration (signed hnsecs)
+	* if ptr == 10, length is a date or date time (bit packed, see flags in data to determine if it is a Date, Time, or DateTime)
+	* if ptr == 11, length is a dchar
+	* if ptr == 12, length is a bool (redundant to int?)
+
+	13, 14 reserved. prolly decimals. (4, 8 digits after decimal)
+
 	* if ptr == 15, length must be 0. this holds an empty, non-null, SSO string.
 	* if ptr >= 16 && < 24, length is reinterpret-casted a small string of length of (ptr & 0x7) + 1
+
 	* if length == size_t.max, ptr is interpreted as a stringz
 	* if ptr >= 1024, it is a non-null D string or byte array. It is a string if the length high bit is clear, a byte array if it is set. the length is what is left after you mask that out.
 
 	All other ptr values are reserved for future expansion.
+
+	It basically can store:
+		null
+			type details = must be 0
+		int (actually long)
+			type details = formatting hints
+		float (actually double)
+			type details = formatting hints
+		dchar (actually enum - upper half is the type tag, lower half is the member tag)
+			type details = ???
+		decimal
+			type details = precision specifier
+		object
+			type details = ???
+		timestamp
+			type details: ticks, utc timestamp, relative duration
+
+		sso
+		stringz
+
+		or it is bytes or a string; a normal D array (just bytes has a high bit set on length).
+
+	But there are subtypes of some of those; ints can just have formatting hints attached.
+		Could reserve 0-7 as low level type flag (null, int, float, pointer, object)
+		15-24 still can be the sso thing
+
+		We have 10 bits really.
+
+		00000 00000
+		????? OOLLL
+
+		The ????? are type details bits.
+
+	64 bits decmial to 4 points of precision needs... 14 bits for the small part (so max of 4 digits)? so 50 bits for the big part (max of about 1 quadrillion)
+		...actually it can just be a dollars * 10000 + cents * 100.
+
 +/
 struct LimitedVariant {
 
@@ -172,6 +717,19 @@ struct LimitedVariant {
 		intBinary,
 		intOctal,
 		double_,
+		object,
+
+		monoTime,
+		utcTimestamp,
+		duration,
+		dateTime,
+
+		// FIXME boolean? char? decimal?
+		// could do enums by way of a pointer but kinda iffy
+
+		// maybe some kind of prefixed string too for stuff like xml and json or enums etc.
+
+		// fyi can also use stringzs or length-prefixed string pointers
 		emptySso,
 		stringSso,
 		stringz,
@@ -182,7 +740,9 @@ struct LimitedVariant {
 	}
 
 	/++
+		Each datum stored in the LimitedVariant has a tag associated with it.
 
+		Each tag belongs to one or more data families.
 	+/
 	Contains contains() const {
 		auto tag = cast(size_t) ptr;
@@ -194,6 +754,13 @@ struct LimitedVariant {
 			case 3: return Contains.intBinary;
 			case 4: return Contains.intOctal;
 			case 5: return Contains.double_;
+			case 6: return Contains.object;
+
+			case 7: return Contains.monoTime;
+			case 8: return Contains.utcTimestamp;
+			case 9: return Contains.duration;
+			case 10: return Contains.dateTime;
+
 			case 15: return length is null ? Contains.emptySso : Contains.invalid;
 			default:
 				if(tag >= 16 && tag < 24) {
@@ -210,6 +777,11 @@ struct LimitedVariant {
 	}
 
 	/// ditto
+	bool containsNull() const {
+		return contains() == Contains.null_;
+	}
+
+	/// ditto
 	bool containsInt() const {
 		with(Contains)
 		switch(contains) {
@@ -220,12 +792,33 @@ struct LimitedVariant {
 		}
 	}
 
+	// all specializations of int...
+
+	/// ditto
+	bool containsMonoTime() const {
+		return contains() == Contains.monoTime;
+	}
+	/// ditto
+	bool containsUtcTimestamp() const {
+		return contains() == Contains.utcTimestamp;
+	}
+	/// ditto
+	bool containsDuration() const {
+		return contains() == Contains.duration;
+	}
+	/// ditto
+	bool containsDateTime() const {
+		return contains() == Contains.dateTime;
+	}
+
+	// done int specializations
+
 	/// ditto
 	bool containsString() const {
 		with(Contains)
 		switch(contains) {
 			case null_, emptySso, stringSso, string:
-			// case stringz:
+			case stringz:
 				return true;
 			default:
 				return false;
@@ -281,6 +874,8 @@ struct LimitedVariant {
 				return (cast(char*) &length)[0 .. len];
 			case string:
 				return (cast(const(char)*) ptr)[0 .. cast(size_t) length];
+			case stringz:
+				return arsd.core.stringz(cast(char*) ptr).borrow;
 			default:
 				Throw(); assert(0);
 		}
@@ -297,9 +892,11 @@ struct LimitedVariant {
 
 	/// ditto
 	double getDouble() const {
-		if(containsDouble)
-			return *cast(double*) &length;
-		else
+		if(containsDouble) {
+			floathack hack;
+			hack.e = cast(void*) length; // casting away const
+			return hack.d;
+		} else
 			Throw();
 		assert(0);
 	}
@@ -316,6 +913,55 @@ struct LimitedVariant {
 				Throw(); assert(0);
 		}
 	}
+
+	/// ditto
+	Object getObject() const {
+		with(Contains)
+		switch(contains()) {
+			case null_:
+				return null;
+			case object:
+				return cast(Object) length; // FIXME const correctness sigh
+			default:
+				Throw(); assert(0);
+		}
+	}
+
+	/// ditto
+	MonoTime getMonoTime() const {
+		if(containsMonoTime) {
+			MonoTime time;
+			__traits(getMember, time, "_ticks") = cast(long) length;
+			return time;
+		} else
+			Throw();
+		assert(0);
+	}
+	/// ditto
+	SimplifiedUtcTimestamp getUtcTimestamp() const {
+		if(containsUtcTimestamp)
+			return SimplifiedUtcTimestamp(cast(long) length);
+		else
+			Throw();
+		assert(0);
+	}
+	/// ditto
+	Duration getDuration() const {
+		if(containsDuration)
+			return hnsecs(cast(long) length);
+		else
+			Throw();
+		assert(0);
+	}
+	/// ditto
+	PackedDateTime getDateTime() const {
+		if(containsDateTime)
+			return PackedDateTime(cast(long) length);
+		else
+			Throw();
+		assert(0);
+	}
+
 
 	/++
 
@@ -344,28 +990,52 @@ struct LimitedVariant {
 				return intHelper("0b", 2);
 			case intOctal:
 				return intHelper("0o", 8);
-			case emptySso, stringSso, string:
+			case emptySso, stringSso, string, stringz:
 				return getString().idup;
 			case bytes:
 				auto b = getBytes();
 
 				return "<bytes>"; // FIXME
-
+			case object:
+				auto o = getObject();
+				return o is null ? "null" : o.toString();
+			case monoTime:
+				return getMonoTime.toString();
+			case utcTimestamp:
+				return getUtcTimestamp().toString();
+			case duration:
+				return getDuration().toString();
+			case dateTime:
+				return getDateTime().toString();
 			case double_:
-				assert(0); // FIXME
-			case stringz:
-				assert(0); // FIXME
+				auto d = getDouble();
+
+				import core.stdc.stdio;
+				char[128] buffer;
+				auto count = snprintf(buffer.ptr, buffer.length, "%.17lf", d);
+				return buffer[0 .. count].idup;
 			case invalid:
 				return "<invalid>";
 		}
 	}
 
 	/++
-
+		Note for integral types that are not `int` and `long` (for example, `short` or `ubyte`), you might want to explicitly convert them to `int`.
 	+/
 	this(string s) {
 		ptr = cast(const(ubyte)*) s.ptr;
 		length = cast(void*) s.length;
+	}
+
+	/// ditto
+	this(const(char)* stringz) {
+		if(stringz !is null) {
+			ptr = cast(const(ubyte)*) stringz;
+			length = cast(void*) size_t.max;
+		} else {
+			ptr = null;
+			length = null;
+		}
 	}
 
 	/// ditto
@@ -389,12 +1059,55 @@ struct LimitedVariant {
 	}
 
 	/// ditto
-	version(none)
+	this(int i, int base = 10) {
+		this(cast(long) i, base);
+	}
+
+	/// ditto
+	this(bool i) {
+		// FIXME?
+		this(cast(long) i);
+	}
+
+	/// ditto
 	this(double d) {
-		// this crashes dmd! omg
-		assert(0);
-		// ptr = cast(ubyte*) 15;
-		// length = cast(void*) *cast(size_t*) &d;
+		// the reinterpret cast hack crashes dmd! omg
+		ptr = cast(ubyte*) 5;
+
+		floathack h;
+		h.d = d;
+
+		this.length = h.e;
+	}
+
+	/// ditto
+	this(Object o) {
+		this.ptr = cast(ubyte*) 6;
+		this.length = cast(void*) o;
+	}
+
+	/// ditto
+	this(MonoTime a) {
+		this.ptr = cast(ubyte*) 7;
+		this.length = cast(void*) a.ticks;
+	}
+
+	/// ditto
+	this(SimplifiedUtcTimestamp a) {
+		this.ptr = cast(ubyte*) 8;
+		this.length = cast(void*) a.timestamp;
+	}
+
+	/// ditto
+	this(Duration a) {
+		this.ptr = cast(ubyte*) 9;
+		this.length = cast(void*) a.total!"hnsecs";
+	}
+
+	/// ditto
+	this(PackedDateTime a) {
+		this.ptr = cast(ubyte*) 10;
+		this.length = cast(void*) a.packedData;
 	}
 }
 
@@ -413,6 +1126,16 @@ unittest {
 	assert(v3.containsBytes());
 	assert(!v3.containsString());
 	assert(v3.getBytes() == [1, 2, 3]);
+}
+
+private union floathack {
+	// in 32 bit we'll use float instead since it at least fits in the void*
+	static if(double.sizeof == (void*).sizeof) {
+		double d;
+	} else {
+		float d;
+	}
+	void* e;
 }
 
 /++
@@ -504,7 +1227,7 @@ struct OwnedClass(Class) {
 	}
 }
 
-
+// might move RecyclableMemory here
 
 version(Posix)
 package(arsd) void makeNonBlocking(int fd) {
@@ -900,11 +1623,17 @@ unittest {
 +/
 nothrow @safe @nogc pure
 inout(char)[] stripInternal(return inout(char)[] s) {
+	bool isAllWhitespace = true;
 	foreach(i, char c; s)
 		if(c != ' ' && c != '\t' && c != '\n' && c != '\r') {
 			s = s[i .. $];
+			isAllWhitespace = false;
 			break;
 		}
+
+	if(isAllWhitespace)
+		return s[$..$];
+
 	for(int a = cast(int)(s.length - 1); a > 0; a--) {
 		char c = s[a];
 		if(c != ' ' && c != '\t' && c != '\n' && c != '\r') {
@@ -916,22 +1645,26 @@ inout(char)[] stripInternal(return inout(char)[] s) {
 	return s;
 }
 
+/// ditto
 nothrow @safe @nogc pure
 inout(char)[] stripRightInternal(return inout(char)[] s) {
-	for(int a = cast(int)(s.length - 1); a > 0; a--) {
-		char c = s[a];
+	bool isAllWhitespace = true;
+	foreach_reverse(a, c; s) {
 		if(c != ' ' && c != '\t' && c != '\n' && c != '\r') {
 			s = s[0 .. a + 1];
+			isAllWhitespace = false;
 			break;
 		}
 	}
+	if(isAllWhitespace)
+		s = s[0..0];
 
 	return s;
 
 }
 
 /++
-	Shortcut for converting some types to string without invoking Phobos (but it will as a last resort).
+	Shortcut for converting some types to string without invoking Phobos (but it may as a last resort).
 
 	History:
 		Moved from color.d to core.d in March 2023 (dub v11.0).
@@ -940,8 +1673,6 @@ string toStringInternal(T)(T t) {
 	char[32] buffer;
 	static if(is(T : string))
 		return t;
-	else static if(is(T : long))
-		return intToString(t, buffer[]).idup;
 	else static if(is(T == enum)) {
 		switch(t) {
 			foreach(memberName; __traits(allMembers, T)) {
@@ -951,9 +1682,20 @@ string toStringInternal(T)(T t) {
 			default:
 				return "<unknown>";
 		}
+	} else static if(is(T : long)) {
+		return intToString(t, buffer[]).idup;
+	} else static if(is(T : const E[], E)) {
+		string ret = "[";
+		foreach(idx, e; t) {
+			if(idx)
+				ret ~= ", ";
+			ret ~= toStringInternal(e);
+		}
+		ret ~= "]";
+		return ret;
 	} else {
-		import std.conv;
-		return to!string(t);
+		static assert(0, T.stringof ~ " makes compile too slow");
+		// import std.conv; return to!string(t);
 	}
 }
 
@@ -997,6 +1739,193 @@ unittest {
 	assert(flagsToString!MyFlags(3) == "a | b");
 	assert(flagsToString!MyFlags(0) == "none");
 	assert(flagsToString!MyFlags(2) == "b");
+}
+
+private enum dchar replacementDchar = '\uFFFD';
+
+package size_t encodeUtf8(out char[4] buf, dchar c) @safe pure {
+    if (c <= 0x7F)
+    {
+        assert(isValidDchar(c));
+        buf[0] = cast(char) c;
+        return 1;
+    }
+    if (c <= 0x7FF)
+    {
+        assert(isValidDchar(c));
+        buf[0] = cast(char)(0xC0 | (c >> 6));
+        buf[1] = cast(char)(0x80 | (c & 0x3F));
+        return 2;
+    }
+    if (c <= 0xFFFF)
+    {
+        if (0xD800 <= c && c <= 0xDFFF)
+            c = replacementDchar;
+
+        assert(isValidDchar(c));
+    L3:
+        buf[0] = cast(char)(0xE0 | (c >> 12));
+        buf[1] = cast(char)(0x80 | ((c >> 6) & 0x3F));
+        buf[2] = cast(char)(0x80 | (c & 0x3F));
+        return 3;
+    }
+    if (c <= 0x10FFFF)
+    {
+        assert(isValidDchar(c));
+        buf[0] = cast(char)(0xF0 | (c >> 18));
+        buf[1] = cast(char)(0x80 | ((c >> 12) & 0x3F));
+        buf[2] = cast(char)(0x80 | ((c >> 6) & 0x3F));
+        buf[3] = cast(char)(0x80 | (c & 0x3F));
+        return 4;
+    }
+
+    assert(!isValidDchar(c));
+    c = replacementDchar;
+    goto L3;
+}
+
+
+
+private bool isValidDchar(dchar c) pure nothrow @safe @nogc
+{
+    return c < 0xD800 || (c > 0xDFFF && c <= 0x10FFFF);
+}
+
+// technically s is octets but meh
+package string encodeUriComponent(string s) {
+	char[3] encodeChar(char c) {
+		char[3] buffer;
+		buffer[0] = '%';
+
+		enum hexchars = "0123456789ABCDEF";
+		buffer[1] = hexchars[c >> 4];
+		buffer[2] = hexchars[c & 0x0f];
+
+		return buffer;
+	}
+
+	string n;
+	size_t previous = 0;
+	foreach(idx, char ch; s) {
+		if(
+			(ch >= 'A' && ch <= 'Z')
+			||
+			(ch >= 'a' && ch <= 'z')
+			||
+			(ch >= '0' && ch <= '9')
+			|| ch == '-' || ch == '_' || ch == '.' || ch == '~' // unreserved set
+			|| ch == '!' || ch == '*' || ch == '\''|| ch == '(' || ch == ')' // subdelims but allowed in uri component (phobos also no encode them)
+		) {
+			// does not need encoding
+		} else {
+			n ~= s[previous .. idx];
+			n ~= encodeChar(ch);
+			previous = idx + 1;
+		}
+	}
+
+	if(n.length) {
+		n ~= s[previous .. $];
+		return n;
+	} else {
+		return s; // nothing needed encoding
+	}
+}
+unittest {
+	assert(encodeUriComponent("foo") == "foo");
+	assert(encodeUriComponent("f33Ao") == "f33Ao");
+	assert(encodeUriComponent("/") == "%2F");
+	assert(encodeUriComponent("/foo") == "%2Ffoo");
+	assert(encodeUriComponent("foo/") == "foo%2F");
+	assert(encodeUriComponent("foo/bar") == "foo%2Fbar");
+	assert(encodeUriComponent("foo/bar/") == "foo%2Fbar%2F");
+}
+
+// FIXME: I think if translatePlusToSpace we're supposed to do newline normalization too
+package string decodeUriComponent(string s, bool translatePlusToSpace = false) {
+	int skipping = 0;
+	size_t previous = 0;
+	string n = null;
+	foreach(idx, char ch; s) {
+		if(skipping) {
+			skipping--;
+			continue;
+		}
+
+		if(ch == '%') {
+			int hexDecode(char c) {
+				if(c >= 'A' && c <= 'F')
+					return c - 'A' + 10;
+				else if(c >= 'a' && c <= 'f')
+					return c - 'a' + 10;
+				else if(c >= '0' && c <= '9')
+					return c - '0' + 0;
+				else
+					throw ArsdException!"Invalid percent-encoding"("Invalid char encountered", idx, s);
+			}
+
+			skipping = 2;
+			n ~= s[previous .. idx];
+
+			if(idx + 2 >= s.length)
+				throw ArsdException!"Invalid percent-encoding"("End of string reached", idx, s);
+
+			n ~= (hexDecode(s[idx + 1]) << 4) | hexDecode(s[idx + 2]);
+
+			previous = idx + 3;
+		} else if(translatePlusToSpace && ch == '+') {
+			n ~= s[previous .. idx];
+			n ~= " ";
+			previous = idx + 1;
+		}
+	}
+
+	if(n.length) {
+		n ~= s[previous .. $];
+		return n;
+	} else {
+		return s; // nothing needed decoding
+	}
+}
+
+unittest {
+	assert(decodeUriComponent("foo") == "foo");
+	assert(decodeUriComponent("%2F") == "/");
+	assert(decodeUriComponent("%2f") == "/");
+	assert(decodeUriComponent("%2Ffoo") == "/foo");
+	assert(decodeUriComponent("foo%2F") == "foo/");
+	assert(decodeUriComponent("foo%2Fbar") == "foo/bar");
+	assert(decodeUriComponent("foo%2Fbar%2F") == "foo/bar/");
+	assert(decodeUriComponent("%2F%2F%2F") == "///");
+
+	assert(decodeUriComponent("+") == "+");
+	assert(decodeUriComponent("+", true) == " ");
+}
+
+public auto toDelegate(T)(T t) {
+	// static assert(is(T == function)); // lol idk how to do what i actually want here
+
+	static if(is(T Return == return))
+	static if(is(typeof(*T) Params == __parameters)) {
+		static struct Wrapper {
+			Return call(Params params) {
+				return (cast(T) &this)(params);
+			}
+		}
+		return &((cast(Wrapper*) t).call);
+	} else static assert(0, "could not get params; is it already a delegate you can pass directly?");
+	else static assert(0, "could not get return value, if it is a functor maybe try getting a delegate with `&yourobj.opCall` instead of toDelegate(yourobj)");
+}
+
+@system unittest {
+	int function(int) fn;
+	fn = (a) { return a; };
+
+	int delegate(int) dg = toDelegate(fn);
+
+	assert(dg.ptr is fn); // it stores the original function as the context pointer
+	assert(dg.funcptr !is fn); // which is called through a lil trampoline
+	assert(dg(5) == 5); // and forwards the args correctly
 }
 
 /++
@@ -1395,7 +2324,7 @@ class InvalidArgumentsException : ArsdExceptionBase {
 	override void getAdditionalPrintableInformation(scope void delegate(string name, in char[] value) sink) const {
 		// FIXME: print the details better
 		foreach(arg; invalidArguments)
-			sink("invalidArguments[]", arg.name ~ " " ~ arg.description);
+			sink(arg.name, arg.givenValue.toString ~ " - " ~ arg.description);
 	}
 }
 
@@ -1582,7 +2511,7 @@ struct SystemErrorCode {
 		Constructs a string containing both the code and the explanation string.
 	+/
 	string toString() const {
-		return codeAsString ~ " " ~ errorString;
+		return "[" ~ codeAsString ~ "] " ~ errorString;
 	}
 
 	/++
@@ -1597,14 +2526,14 @@ struct SystemErrorCode {
 				return intToString(code, buffer[]).idup;
 			case Type.win32:
 				buffer[0 .. 2] = "0x";
-				return buffer[0 .. 2 + intToString(code, buffer[2 .. $], IntToStringArgs().withRadix(16).withPadding(8)).length].idup;
+				return buffer[0 .. 2 + intToString(cast(uint) code, buffer[2 .. $], IntToStringArgs().withRadix(16).withPadding(8)).length].idup;
 		}
 	}
 
 	/++
 		A text explanation of the code. See [codeAsString] for a string representation of the numeric representation.
 	+/
-	string errorString() const {
+	string errorString() const @trusted {
 		final switch(type) {
 			case Type.errno:
 				import core.stdc.string;
@@ -1930,15 +2859,95 @@ interface ICoreEventLoop {
 		Runs the event loop for this thread until the `until` delegate returns `true`.
 	+/
 	final void run(scope bool delegate() until) {
-		while(!until()) {
+		while(!exitApplicationRequested && !until()) {
 			runOnce();
+		}
+	}
+
+	private __gshared bool exitApplicationRequested;
+
+	final static void exitApplication() {
+		exitApplicationRequested = true;
+		// FIXME: wake up all the threads
+	}
+
+	/++
+		Returns details from a call to [runOnce]. Use the named methods here for details, or it can be used in a `while` loop directly thanks to its `opCast` automatic conversion to `bool`.
+
+		History:
+			Added December 28, 2023
+	+/
+	static struct RunOnceResult {
+		enum Possibilities {
+			CarryOn,
+			LocalExit,
+			GlobalExit,
+			Interrupted
+
+		}
+		Possibilities result;
+
+		/++
+			Returns `true` if the event loop should generally continue.
+
+			Might be false if the local loop was exited or if the application is supposed to exit. If this is `false`, check [applicationExitRequested] to determine if you should move on to other work or start your final cleanup process.
+		+/
+		bool shouldContinue() const {
+			return result == Possibilities.CarryOn;
+		}
+
+		/++
+			Returns `true` if [ICoreEventLoop.exitApplication] was called during this event, or if the user or operating system has requested the application exit.
+
+			Details might be available through other means.
+		+/
+		bool applicationExitRequested() const {
+			return result == Possibilities.GlobalExit;
+		}
+
+		/++
+			Returns [shouldContinue] when used in a context for an implicit bool (e.g. `if` statements).
+		+/
+		bool opCast(T : bool)() const {
+			reutrn shouldContinue();
 		}
 	}
 
 	/++
 		Runs a single iteration of the event loop for this thread. It will return when the first thing happens, but that thing might be totally uninteresting to anyone, or it might trigger significant work you'll wait on.
+
+		Note that running this externally instead of `run` gives only the $(I illusion) of control. You're actually better off setting a recurring timer if you need things to run on a clock tick, or a single-shot timer for a one time event. They're more likely to be called on schedule inside this function than outside it.
+
+		Parameters:
+			timeout = a timeout value for an idle loop. There is no guarantee you won't return earlier or later than this; the function might run longer than the timeout if it has work to do. Pass `Duration.max` (the default) for an infinite duration timeout (but remember, once it finds work to do, including a false-positive wakeup or interruption by the operating system, it will return early anyway).
+
+		History:
+			Prior to December 28, 2023, it returned `void` and took no arguments. This change is breaking, but since the entire module is documented as unstable, it was permitted to happen as that document provided prior notice.
 	+/
-	void runOnce();
+	RunOnceResult runOnce(Duration timeout = Duration.max);
+
+	/++
+		Adds a delegate to be called on each loop iteration, called based on the `timingFlags`.
+
+
+		The order in which the delegates are called is undefined and may change with each iteration of the loop. Additionally, when and how many times a loop iterates is undefined; multiple events might be handled by each iteration, or sometimes, nothing will be handled and it woke up spuriously. Your delegates need to be ok with all of this.
+
+		Parameters:
+			dg = the delegate to call
+			timingFlags =
+				0: never actually run the function; it can assert error if you pass this
+				1: run before each loop OS wait call
+				2: run after each loop OS wait call
+				3: run both before and after each OS wait call
+				4: single shot?
+				8: no-coalesce? (if after was just run, it will skip the before loops unless this flag is set)
+
+	+/
+	void addDelegateOnLoopIteration(void delegate() dg, uint timingFlags);
+
+	final void addDelegateOnLoopIteration(void function() dg, uint timingFlags) {
+		addDelegateOnLoopIteration(toDelegate(dg), timingFlags);
+	}
 
 	// to send messages between threads, i'll queue up a function that just call dispatchMessage. can embed the arg inside the callback helper prolly.
 	// tho i might prefer to actually do messages w/ run payloads so it is easier to deduplicate i can still dedupe by insepcting the call args so idk
@@ -1963,7 +2972,10 @@ interface ICoreEventLoop {
 				} else version(Arsd_core_kqueue) {
 					// intentionally blank - all registrations are one-shot there
 					// FIXME: actually it might not have gone off yet, in that case we do need to delete the filter
-				} else static assert(0);
+				} else version(EmptyCoreEvent) {
+
+				}
+				else static assert(0);
 
 				cb.release();
 				this = typeof(this).init;
@@ -1989,6 +3001,8 @@ interface ICoreEventLoop {
 				} else version(Arsd_core_kqueue) {
 					// intentionally blank - all registrations are one-shot there
 					// FIXME: actually it might not have gone off yet, in that case we do need to delete the filter
+				} else version(EmptyCoreEvent) {
+
 				} else static assert(0);
 
 				cb.release();
@@ -2007,6 +3021,31 @@ interface ICoreEventLoop {
 		UnregisterToken addCallbackOnFdReadable(int fd, CallbackHelper cb);
 		RearmToken addCallbackOnFdReadableOneShot(int fd, CallbackHelper cb);
 		RearmToken addCallbackOnFdWritableOneShot(int fd, CallbackHelper cb);
+	}
+
+	version(Windows) {
+		@mustuse
+		static struct UnregisterToken {
+			private CoreEventLoopImplementation impl;
+			private HANDLE handle;
+			private CallbackHelper cb;
+
+			/++
+				Unregisters the handle from the event loop and releases the reference to the callback held by the event loop (which will probably free it).
+
+				You must call this when you're done. Normally, this will be right before you close the handle.
+			+/
+			void unregister() {
+				assert(impl !is null, "Cannot reuse unregister token");
+
+				impl.unregisterHandle(handle, cb);
+
+				cb.release();
+				this = typeof(this).init;
+			}
+		}
+
+		UnregisterToken addCallbackOnHandleReady(HANDLE handle, CallbackHelper cb);
 	}
 }
 
@@ -2062,9 +3101,24 @@ package(arsd) enum EventLoopType {
 	Tasks are assigned to a worker thread and may share it with other tasks.
 +/
 
+/+
+private ThreadLocalGcRoots gcRoots;
+
+private struct ThreadLocalGcRoots {
+	// it actually would be kinda cool if i could tell the GC
+	// that only part of this array is actually used so it can skip
+	// scanning the rest. but meh.
+	const(void)*[] roots;
+
+	void* add(const(void)* what) {
+		roots ~= what;
+		return &roots[$-1];
+	}
+}
++/
 
 // the GC may not be able to see this! remember, it can be hidden inside kernel buffers
-private class CallbackHelper {
+package(arsd) class CallbackHelper {
 	import core.memory;
 
 	void call() {
@@ -2076,10 +3130,12 @@ private class CallbackHelper {
 	void*[3] argsStore;
 
 	void addref() {
+		version(HasThread)
 		atomicOp!"+="(refcount, 1);
 	}
 
 	void release() {
+		version(HasThread)
 		if(atomicOp!"-="(refcount, 1) <= 0) {
 			if(flags & 1)
 				GC.removeRoot(cast(void*) this);
@@ -2094,6 +3150,7 @@ private class CallbackHelper {
 	}
 
 	this(void delegate() callback, bool addRoot = true) {
+		version(HasThread)
 		if(addRoot) {
 			GC.addRoot(cast(void*) this);
 			this.flags |= 1;
@@ -2104,28 +3161,383 @@ private class CallbackHelper {
 	}
 }
 
+inout(char)[] trimSlashesRight(inout(char)[] txt) {
+	//if(txt.length && (txt[0] == '/' || txt[0] == '\\'))
+		//txt = txt[1 .. $];
+
+	if(txt.length && (txt[$-1] == '/' || txt[$-1] == '\\'))
+		txt = txt[0 .. $-1];
+
+	return txt;
+}
+
+enum TreatAsWindowsPath {
+	guess,
+	ifVersionWindows,
+	yes,
+	no,
+}
+
+// FIXME add uri from cgi/http2 and make sure the relative methods are reasonable compatible
+
 /++
 	This represents a file. Technically, file paths aren't actually strings (for example, on Linux, they need not be valid utf-8, while a D string is supposed to be), even though we almost always use them like that.
 
 	This type is meant to represent a filename / path. I might not keep it around.
 +/
 struct FilePath {
-	string path;
+	private string path;
 
-	bool isNull() {
+	this(string path) {
+		this.path = path;
+	}
+
+	bool isNull() const {
 		return path is null;
 	}
 
-	bool opCast(T:bool)() {
+	bool opCast(T:bool)() const {
 		return !isNull;
 	}
 
-	string toString() {
+	string toString() const {
 		return path;
 	}
 
 	//alias toString this;
+
+	/+ +++++++++++++++++ +/
+	/+  String analysis  +/
+	/+ +++++++++++++++++ +/
+
+	FilePath makeAbsolute(FilePath base, TreatAsWindowsPath treatAsWindowsPath = TreatAsWindowsPath.guess) const {
+		if(base.path.length == 0)
+			return this.removeExtraParts();
+		if(base.path[$-1] != '/' && base.path[$-1] != '\\')
+			base.path ~= '/';
+
+		bool isWindowsPath;
+		final switch(treatAsWindowsPath) {
+			case TreatAsWindowsPath.guess:
+			case TreatAsWindowsPath.yes:
+				isWindowsPath = true;
+			break;
+			case TreatAsWindowsPath.no:
+				isWindowsPath = false;
+			break;
+			case TreatAsWindowsPath.ifVersionWindows:
+				version(Windows)
+					isWindowsPath = true;
+				else
+					isWindowsPath = false;
+			break;
+		}
+		if(isWindowsPath) {
+			if(this.isUNC)
+				return this.removeExtraParts();
+			if(this.driveName)
+				return this.removeExtraParts();
+			if(this.path.length >= 1 && (this.path[0] == '/' || this.path[0] == '\\')) {
+				// drive-relative path, take the drive from the base
+				return FilePath(base.driveName ~ this.path).removeExtraParts();
+			}
+			// otherwise, take the dir name from the base and add us onto it
+			return FilePath(base.directoryName ~ this.path).removeExtraParts();
+		} else {
+			if(this.path.length >= 1 && this.path[0] == '/')
+				return this.removeExtraParts();
+			else
+				return FilePath(base.directoryName ~ this.path).removeExtraParts();
+		}
+	}
+
+	// dg returns true to continue, false to break
+	void foreachPathComponent(scope bool delegate(size_t index, in char[] component) dg) const {
+		size_t start;
+		size_t skip;
+		if(isUNC()) {
+			dg(start, this.path[start .. 2]);
+			start = 2;
+			skip = 2;
+		}
+		foreach(idx, ch; this.path) {
+			if(skip) { skip--; continue; }
+			if(ch == '/' || ch == '\\') {
+				if(!dg(start, this.path[start .. idx + 1]))
+					return;
+				start = idx + 1;
+			}
+		}
+		if(start != path.length)
+			dg(start, this.path[start .. $]);
+	}
+
+	// remove cases of // or /. or /.. Only valid to call this on an absolute path.
+	private FilePath removeExtraParts() const {
+		bool changeNeeded;
+		foreachPathComponent((idx, component) {
+			auto name = component.trimSlashesRight;
+			if(name.length == 0 && idx != 0)
+				changeNeeded = true;
+			if(name == "." || name == "..")
+				changeNeeded = true;
+			return !changeNeeded;
+		});
+
+		if(!changeNeeded)
+			return this;
+
+		string newPath;
+		foreachPathComponent((idx, component) {
+			auto name = component.trimSlashesRight;
+			if(component == `\\`) // must preserve unc paths
+				newPath ~= component;
+			else if(name.length == 0 && idx != 0)
+				{}
+			else if(name == ".")
+				{}
+			else if(name == "..") {
+				// remove the previous component, unless it is the first component
+				auto sofar = FilePath(newPath);
+				size_t previousComponentIndex;
+				sofar.foreachPathComponent((idx2, component2) {
+					if(idx2 != newPath.length)
+						previousComponentIndex = idx2;
+					return true;
+				});
+
+				if(previousComponentIndex && previousComponentIndex != newPath.length) {
+					newPath = newPath[0 .. previousComponentIndex];
+					//newPath.assumeSafeAppend();
+				}
+			} else {
+				newPath ~= component;
+			}
+
+			return true;
+		});
+
+		return FilePath(newPath);
+	}
+
+	// assuming we're looking at a Windows path...
+	bool isUNC() const {
+		return (path.length > 2 && path[0 .. 2] == `\\`);
+	}
+
+	// assuming we're looking at a Windows path...
+	string driveName() const {
+		if(path.length < 2)
+			return null;
+		if((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) {
+			if(path[1] == ':') {
+				if(path.length == 2 || path[2] == '\\' || path[2] == '/')
+					return path[0 .. 2];
+			}
+		}
+		return null;
+	}
+
+	/+
+	bool isAbsolute() {
+		if(path.length && path[0] == '/')
+			return true;
+
+	}
+
+	FilePath relativeTo() {
+
+	}
+
+	bool matchesGlobPattern(string globPattern) {
+
+	}
+
+	this(string directoryName, string filename) {}
+	this(string directoryName, string basename, string extension) {}
+
+	// remove ./, ../, stuff like that
+	FilePath normalize(FilePath relativeTo) {}
+	+/
+
+	/++
+		Returns the path with the directory cut off.
+	+/
+	string filename() {
+		foreach_reverse(idx, ch; path) {
+			if(ch == '\\' || ch == '/')
+				return path[idx + 1 .. $];
+		}
+		return path;
+	}
+
+	/++
+		Returns the path with the filename cut off.
+	+/
+	string directoryName() {
+		auto fn = this.filename();
+		if(fn is path)
+			return null;
+		return path[0 .. $ - fn.length];
+	}
+
+	/++
+		Returns the file extension, if present, including the last dot.
+	+/
+	string extension() {
+		foreach_reverse(idx, ch; path) {
+			if(ch == '.')
+				return path[idx .. $];
+		}
+		return null;
+	}
+
+	/++
+		Guesses the media (aka mime) content type from the file extension for this path.
+
+		Only has a few things supported. Returns null if it doesn't know.
+
+		History:
+			Moved from arsd.cgi to arsd.core.FilePath on October 28, 2024
+	+/
+	string contentTypeFromFileExtension() {
+		switch(this.extension) {
+			// images
+			case ".png":
+				return "image/png";
+			case ".apng":
+				return "image/apng";
+			case ".svg":
+				return "image/svg+xml";
+			case ".jpg":
+			case ".jpeg":
+				return "image/jpeg";
+
+			case ".txt":
+				return "text/plain";
+
+			case ".html":
+				return "text/html";
+			case ".css":
+				return "text/css";
+			case ".js":
+				return "application/javascript";
+			case ".wasm":
+				return "application/wasm";
+
+			case ".mp3":
+				return "audio/mpeg";
+
+			case ".pdf":
+				return "application/pdf";
+
+			default:
+				return null;
+		}
+	}
 }
+
+unittest {
+	FilePath fn;
+
+	fn = FilePath("dir/name.ext");
+	assert(fn.directoryName == "dir/");
+	assert(fn.filename == "name.ext");
+	assert(fn.extension == ".ext");
+
+	fn = FilePath(null);
+	assert(fn.directoryName is null);
+	assert(fn.filename is null);
+	assert(fn.extension is null);
+
+	fn = FilePath("file.txt");
+	assert(fn.directoryName is null);
+	assert(fn.filename == "file.txt");
+	assert(fn.extension == ".txt");
+
+	fn = FilePath("dir/");
+	assert(fn.directoryName == "dir/");
+	assert(fn.filename == "");
+	assert(fn.extension is null);
+
+	assert(fn.makeAbsolute(FilePath("/")).path == "/dir/");
+	assert(fn.makeAbsolute(FilePath("file.txt")).path == "file.txt/dir/"); // FilePaths as a base are ALWAYS treated as a directory
+	assert(FilePath("file.txt").makeAbsolute(fn).path == "dir/file.txt");
+
+	assert(FilePath("c:/file.txt").makeAbsolute(FilePath("d:/")).path == "c:/file.txt");
+	assert(FilePath("../file.txt").makeAbsolute(FilePath("d:/")).path == "d:/file.txt");
+
+	assert(FilePath("../file.txt").makeAbsolute(FilePath("d:/foo")).path == "d:/file.txt");
+	assert(FilePath("../file.txt").makeAbsolute(FilePath("d:/")).path == "d:/file.txt");
+	assert(FilePath("../file.txt").makeAbsolute(FilePath("/home/me")).path == "/home/file.txt");
+	assert(FilePath("../file.txt").makeAbsolute(FilePath(`\\arsd\me`)).path == `\\arsd\file.txt`);
+	assert(FilePath("../../file.txt").makeAbsolute(FilePath("/home/me")).path == "/file.txt");
+	assert(FilePath("../../../file.txt").makeAbsolute(FilePath("/home/me")).path == "/file.txt");
+
+	assert(FilePath("test/").makeAbsolute(FilePath("/home/me/")).path == "/home/me/test/");
+	assert(FilePath("/home/me/test/").makeAbsolute(FilePath("/home/me/test/")).path == "/home/me/test/");
+}
+
+version(HasFile)
+/++
+	History:
+		Added January 2, 2024
++/
+FilePath getCurrentWorkingDirectory() {
+	version(Windows) {
+		wchar[256] staticBuffer;
+		wchar[] buffer = staticBuffer[];
+
+		try_again:
+		auto ret = GetCurrentDirectoryW(cast(DWORD) buffer.length, buffer.ptr);
+		if(ret == 0)
+			throw new WindowsApiException("GetCurrentDirectoryW", GetLastError());
+		if(ret < buffer.length) {
+			return FilePath(makeUtf8StringFromWindowsString(buffer[0 .. ret]));
+		} else {
+			buffer.length = ret;
+			goto try_again;
+		}
+	} else version(Posix) {
+		char[128] staticBuffer;
+		char[] buffer = staticBuffer[];
+
+		try_again:
+		auto ret = getcwd(buffer.ptr, buffer.length);
+		if(ret is null && errno == ERANGE && buffer.length < 4096 / 2) {
+			buffer.length = buffer.length * 2;
+			goto try_again;
+		} else if(ret is null) {
+			throw new ErrnoApiException("getcwd", errno);
+		}
+		return FilePath(stringz(ret).borrow.idup);
+	} else
+		assert(0, "Not implemented");
+}
+
+/+
+struct FilePathGeneric {
+
+}
+
+struct FilePathWin32 {
+
+}
+
+struct FilePathPosix {
+
+}
+
+struct FilePathWindowsUnc {
+
+}
+
+version(Windows)
+	alias FilePath = FilePathWin32;
+else
+	alias FilePath = FilePathPosix;
++/
+
 
 /++
 	Represents a generic async, waitable request.
@@ -2288,7 +3700,7 @@ version(Windows) {
 /++
 	An `AbstractFile` represents a file handle on the operating system level. You cannot do much with it.
 +/
-class AbstractFile {
+version(HasFile) class AbstractFile {
 	private {
 		NativeFileHandle handle;
 	}
@@ -2495,7 +3907,7 @@ class AbstractFile {
 /++
 
 +/
-class File : AbstractFile {
+version(HasFile) class File : AbstractFile {
 
 	/++
 		Opens a file in synchronous access mode.
@@ -2534,7 +3946,7 @@ class File : AbstractFile {
 /++
 	 Only one operation can be pending at any time in the current implementation.
 +/
-class AsyncFile : AbstractFile {
+version(HasFile) class AsyncFile : AbstractFile {
 	/++
 		Opens a file in asynchronous access mode.
 	+/
@@ -2557,6 +3969,9 @@ class AsyncFile : AbstractFile {
 		return new AsyncWriteRequest(this, cast(ubyte[]) buffer, offset);
 	}
 
+}
+else class AsyncFile {
+	package(arsd) this(NativeFileHandle adoptPreSetup) {}
 }
 
 /++
@@ -2802,7 +4217,7 @@ struct UserProvidedBuffer(T) {
 		}
 	}
 
-	package(arsd) T[] slice() return {
+	package(arsd) T[] slice() {
 		return buffer[0 .. actualLength];
 	}
 }
@@ -2822,6 +4237,369 @@ enum OnOutOfSpace {
 }
 
 
+
+/+
+	The GC can be called from any thread, and a lot of cleanup must be done
+	on the gui thread. Since the GC can interrupt any locks - including being
+	triggered inside a critical section - it is vital to avoid deadlocks to get
+	these functions called from the right place.
+
+	If the buffer overflows, things are going to get leaked. I'm kinda ok with that
+	right now.
+
+	The cleanup function is run when the event loop gets around to it, which is just
+	whenever there's something there after it has been woken up for other work. It does
+	NOT wake up the loop itself - can't risk doing that from inside the GC in another thread.
+	(Well actually it might be ok but i don't wanna mess with it right now.)
++/
+package(arsd) struct CleanupQueue {
+	import core.stdc.stdlib;
+
+	void queue(alias func, T...)(T args) {
+		static struct Args {
+			T args;
+		}
+		static struct RealJob {
+			Job j;
+			Args a;
+		}
+		static void call(Job* data) {
+			auto rj = cast(RealJob*) data;
+			func(rj.a.args);
+		}
+
+		RealJob* thing = cast(RealJob*) malloc(RealJob.sizeof);
+		thing.j.call = &call;
+		thing.a.args = args;
+
+		buffer[tail++] = cast(Job*) thing;
+
+		// FIXME: set overflowed
+	}
+
+	void process() {
+		const tail = this.tail;
+
+		while(tail != head) {
+			Job* job = cast(Job*) buffer[head++];
+			job.call(job);
+			free(job);
+		}
+
+		if(overflowed)
+			throw new object.Exception("cleanup overflowed");
+	}
+
+	private:
+
+	ubyte tail; // must ONLY be written by queue
+	ubyte head; // must ONLY be written by process
+	bool overflowed;
+
+	static struct Job {
+		void function(Job*) call;
+	}
+
+	void*[256] buffer;
+}
+package(arsd) __gshared CleanupQueue cleanupQueue;
+
+
+
+
+/++
+	A timer that will trigger your function on a given interval.
+
+
+	You create a timer with an interval and a callback. It will continue
+	to fire on the interval until it is destroyed.
+
+	---
+	auto timer = new Timer(50, { it happened!; });
+	timer.destroy();
+	---
+
+	Timers can only be expected to fire when the event loop is running and only
+	once per iteration through the event loop.
+
+	History:
+		Prior to December 9, 2020, a timer pulse set too high with a handler too
+		slow could lock up the event loop. It now guarantees other things will
+		get a chance to run between timer calls, even if that means not keeping up
+		with the requested interval.
+
+		Originally part of arsd.simpledisplay, this code was integrated into
+		arsd.core on May 26, 2024 (committed on June 10).
++/
+version(HasTimer)
+class Timer {
+	// FIXME: absolute time vs relative time
+	// FIXME: real time?
+
+	// FIXME: I might add overloads for ones that take a count of
+	// how many elapsed since last time (on Windows, it will divide
+	// the ticks thing given, on Linux it is just available) and
+	// maybe one that takes an instance of the Timer itself too
+
+
+	/++
+		Creates an initialized, but unarmed timer. You must call other methods later.
+	+/
+	this(bool actuallyInitialize = true) {
+		if(actuallyInitialize)
+			initialize();
+	}
+
+	private void initialize() {
+		version(Windows) {
+			handle = CreateWaitableTimer(null, false, null);
+			if(handle is null)
+				throw new WindowsApiException("CreateWaitableTimer", GetLastError());
+			cbh = new CallbackHelper(&trigger);
+		} else version(Emscripten) {
+			assert(0);
+		} else version(linux) {
+			import core.sys.linux.timerfd;
+
+			fd = timerfd_create(CLOCK_MONOTONIC, 0);
+			if(fd == -1)
+				throw new Exception("timer create failed");
+
+			auto el = getThisThreadEventLoop(EventLoopType.Ui);
+			unregisterToken = el.addCallbackOnFdReadable(fd, new CallbackHelper(&trigger));
+		} else throw new NotYetImplementedException();
+		// FIXME: freebsd 12 has timer_fd and netbsd 10 too
+	}
+
+	/++
+	+/
+	void setPulseCallback(void delegate() onPulse) {
+		assert(onPulse !is null);
+		this.onPulse = onPulse;
+	}
+
+	/++
+	+/
+	void changeTime(int intervalInMilliseconds, bool repeats) {
+		this.intervalInMilliseconds = intervalInMilliseconds;
+		this.repeats = repeats;
+		changeTimeInternal(intervalInMilliseconds, repeats);
+	}
+
+	private void changeTimeInternal(int intervalInMilliseconds, bool repeats) {
+		version(Windows)
+		{
+			LARGE_INTEGER initialTime;
+			initialTime.QuadPart = -intervalInMilliseconds * 10000000L / 1000; // Windows wants hnsecs, we have msecs
+			if(!SetWaitableTimer(handle, &initialTime, repeats ? intervalInMilliseconds : 0, &timerCallback, cast(void*) cbh, false))
+				throw new WindowsApiException("SetWaitableTimer", GetLastError());
+		} else version(Emscripten) {
+			assert(0);
+		} else version(linux) {
+			import core.sys.linux.timerfd;
+
+			itimerspec value = makeItimerspec(intervalInMilliseconds, repeats);
+			if(timerfd_settime(fd, 0, &value, null) == -1) {
+				throw new ErrnoApiException("couldn't change pulse timer", errno);
+			}
+		} else {
+			throw new NotYetImplementedException();
+		}
+		// FIXME: freebsd 12 has timer_fd and netbsd 10 too
+	}
+
+	/++
+	+/
+	void pause() {
+		// FIXME this kinda makes little sense tbh
+		// when it restarts, it won't be on the same rhythm as it was at first...
+		changeTimeInternal(0, false);
+	}
+
+	/++
+	+/
+	void unpause() {
+		changeTimeInternal(this.intervalInMilliseconds, this.repeats);
+	}
+
+	/++
+	+/
+	void cancel() {
+		version(Windows)
+			CancelWaitableTimer(handle);
+		else
+			changeTime(0, false);
+	}
+
+
+	/++
+		Create a timer with a callback when it triggers.
+	+/
+	this(int intervalInMilliseconds, void delegate() onPulse, bool repeats = true) @trusted {
+		assert(onPulse !is null);
+
+		initialize();
+		setPulseCallback(onPulse);
+		changeTime(intervalInMilliseconds, repeats);
+	}
+
+	/++
+		Sets a one-of timer that happens some time after the given timestamp, then destroys itself
+	+/
+	this(SimplifiedUtcTimestamp when, void delegate() onTimeArrived) {
+		import core.stdc.time;
+		auto ts = when.toUnixTime;
+		auto now = time(null);
+		if(ts <= now) {
+			this(false);
+			onTimeArrived();
+		} else {
+			// FIXME: should use the OS facilities to set the actual time on the real time clock
+			auto dis = this;
+			this(cast(int)(ts - now) * 1000, () {
+				onTimeArrived();
+				dis.cancel();
+				dis.dispose();
+			}, false);
+		}
+	}
+
+	version(Windows) {} else {
+		ICoreEventLoop.UnregisterToken unregisterToken;
+	}
+
+	// just cuz I sometimes call it this.
+	alias dispose = destroy;
+
+	/++
+		Stop and destroy the timer object.
+
+		You should not use it again after destroying it.
+	+/
+	void destroy() {
+		version(Windows) {
+			cbh.release();
+		} else {
+			unregisterToken.unregister();
+		}
+
+		version(Windows) {
+			staticDestroy(handle);
+			handle = null;
+		} else version(linux) {
+			staticDestroy(fd);
+			fd = -1;
+		} else throw new NotYetImplementedException();
+	}
+
+	~this() {
+		version(Windows) {} else
+			cleanupQueue.queue!unregister(unregisterToken);
+		version(Windows) { if(handle)
+			cleanupQueue.queue!staticDestroy(handle);
+		} else version(linux) { if(fd != -1)
+			cleanupQueue.queue!staticDestroy(fd);
+		}
+	}
+
+
+	private:
+
+	version(Windows)
+	static void staticDestroy(HANDLE handle) {
+		if(handle) {
+			// KillTimer(null, handle);
+			CancelWaitableTimer(cast(void*)handle);
+			CloseHandle(handle);
+		}
+	}
+	else version(linux)
+	static void staticDestroy(int fd) @system {
+		if(fd != -1) {
+			import unix = core.sys.posix.unistd;
+
+			unix.close(fd);
+		}
+	}
+
+	version(Windows) {} else
+	static void unregister(arsd.core.ICoreEventLoop.UnregisterToken urt) {
+		if(urt.impl !is null)
+			urt.unregister();
+	}
+
+
+	void delegate() onPulse;
+	int intervalInMilliseconds;
+	bool repeats;
+
+	int lastEventLoopRoundTriggered;
+
+	version(linux) {
+		static auto makeItimerspec(int intervalInMilliseconds, bool repeats) {
+			import core.sys.linux.timerfd;
+
+			itimerspec value;
+			value.it_value.tv_sec = cast(int) (intervalInMilliseconds / 1000);
+			value.it_value.tv_nsec = (intervalInMilliseconds % 1000) * 1000_000;
+
+			if(repeats) {
+				value.it_interval.tv_sec = cast(int) (intervalInMilliseconds / 1000);
+				value.it_interval.tv_nsec = (intervalInMilliseconds % 1000) * 1000_000;
+			}
+
+			return value;
+		}
+	}
+
+	void trigger() {
+		version(linux) {
+			import unix = core.sys.posix.unistd;
+			long val;
+			unix.read(fd, &val, val.sizeof); // gotta clear the pipe
+		} else version(Windows) {
+			if(this.lastEventLoopRoundTriggered == eventLoopRound)
+				return; // never try to actually run faster than the event loop
+			lastEventLoopRoundTriggered = eventLoopRound;
+		} else throw new NotYetImplementedException();
+
+		if(onPulse)
+			onPulse();
+	}
+
+	version(Windows)
+		extern(Windows)
+		//static void timerCallback(HWND, UINT, UINT_PTR timer, DWORD dwTime) nothrow {
+		static void timerCallback(void* timer, DWORD lowTime, DWORD hiTime) nothrow {
+			auto cbh = cast(CallbackHelper) timer;
+			try
+				cbh.call();
+			catch(Throwable e) { sdpy_abort(e); assert(0); }
+		}
+
+	version(Windows) {
+		HANDLE handle;
+		CallbackHelper cbh;
+	} else version(linux) {
+		int fd = -1;
+	} else static if(UseCocoa) {
+	} else static assert(0, "timer not supported");
+}
+
+version(Windows)
+	private void sdpy_abort(Throwable e) nothrow {
+		try
+			MessageBoxA(null, (e.toString() ~ "\0").ptr, "Exception caught in WndProc", 0);
+		catch(Exception e)
+			MessageBoxA(null, "Exception.toString threw too!", "Exception caught in WndProc", 0);
+		ExitProcess(1);
+	}
+
+
+private int eventLoopRound = -1; // so things that assume 0 still work eg lastEventLoopRoundTriggered
+
+
+
 /++
 	For functions that give you an unknown address, you can use this to hold it.
 
@@ -2836,7 +4614,7 @@ enum OnOutOfSpace {
 
 		interface lookup for bind (stream or dgram)
 +/
-struct SocketAddress {
+version(HasSocket) struct SocketAddress {
 	import core.sys.posix.netdb;
 
 	/++
@@ -3079,7 +4857,7 @@ private version(Windows) {
 	}
 }
 
-class AsyncSocket : AsyncFile {
+version(HasFile) class AsyncSocket : AsyncFile {
 	// otherwise: accept, bind, connect, shutdown, close.
 
 	static auto lastError() {
@@ -3127,8 +4905,10 @@ class AsyncSocket : AsyncFile {
 			setCloExec(handle);
 		}
 
-		int opt = 1;
-		setsockopt(handle, SOL_SOCKET, IPV6_V6ONLY, &opt, opt.sizeof);
+		if(address.domain == AF_INET6) {
+			int opt = 1;
+			setsockopt(handle, IPPROTO_IPV6 /*SOL_IPV6*/, IPV6_V6ONLY, &opt, opt.sizeof);
+		}
 
 		// FIXME: chekc for broadcast
 
@@ -3276,7 +5056,7 @@ class AsyncSocket : AsyncFile {
 
 	NOT IMPLEMENTED / NOT STABLE
 +/
-class AsyncConnectRequest : AsyncOperationRequest {
+version(HasSocket) class AsyncConnectRequest : AsyncOperationRequest {
 	// FIXME: i should take a list of addresses and take the first one that succeeds, so a getaddrinfo can be sent straight in.
 	this(AsyncSocket socket, SocketAddress address, ubyte[] dataToWrite) {
 
@@ -3289,7 +5069,7 @@ class AsyncConnectRequest : AsyncOperationRequest {
 }
 /++
 +/
-class AsyncConnectResponse : AsyncOperationResponse {
+version(HasSocket) class AsyncConnectResponse : AsyncOperationResponse {
 	const SystemErrorCode errorCode;
 
 	this(SystemErrorCode errorCode) {
@@ -3309,7 +5089,7 @@ class AsyncConnectResponse : AsyncOperationResponse {
 
 	NOT IMPLEMENTED / NOT STABLE
 +/
-class AsyncAcceptRequest : AsyncOperationRequest {
+version(HasSocket) class AsyncAcceptRequest : AsyncOperationRequest {
 	AsyncSocket socket;
 
 	override void start() {}
@@ -3366,7 +5146,7 @@ class AsyncAcceptRequest : AsyncOperationRequest {
 }
 /++
 +/
-class AsyncAcceptResponse : AsyncOperationResponse {
+version(HasSocket) class AsyncAcceptResponse : AsyncOperationResponse {
 	AsyncSocket newSocket;
 	const SystemErrorCode errorCode;
 
@@ -3386,7 +5166,7 @@ class AsyncAcceptResponse : AsyncOperationResponse {
 
 /++
 +/
-class AsyncReceiveRequest : AsyncOperationRequest {
+version(HasSocket) class AsyncReceiveRequest : AsyncOperationRequest {
 	struct LowLevelOperation {
 		AsyncSocket file;
 		ubyte[] buffer;
@@ -3434,7 +5214,7 @@ class AsyncReceiveRequest : AsyncOperationRequest {
 }
 /++
 +/
-class AsyncReceiveResponse : AsyncOperationResponse {
+version(HasSocket) class AsyncReceiveResponse : AsyncOperationResponse {
 	const ubyte[] bufferWritten;
 	const SystemErrorCode errorCode;
 
@@ -3450,7 +5230,7 @@ class AsyncReceiveResponse : AsyncOperationResponse {
 
 /++
 +/
-class AsyncSendRequest : AsyncOperationRequest {
+version(HasSocket) class AsyncSendRequest : AsyncOperationRequest {
 	struct LowLevelOperation {
 		AsyncSocket file;
 		const(ubyte)[] buffer;
@@ -3496,7 +5276,7 @@ class AsyncSendRequest : AsyncOperationRequest {
 
 /++
 +/
-class AsyncSendResponse : AsyncOperationResponse {
+version(HasSocket) class AsyncSendResponse : AsyncOperationResponse {
 	const ubyte[] bufferWritten;
 	const SystemErrorCode errorCode;
 
@@ -3518,7 +5298,7 @@ class AsyncSendResponse : AsyncOperationResponse {
 
 	NOT IMPLEMENTED / NOT STABLE
 +/
-class StreamServer {
+version(HasSocket) class StreamServer {
 	AsyncSocket[] sockets;
 
 	this(SocketAddress[] listenTo, int backlog = 8) {
@@ -3565,7 +5345,7 @@ unittest {
 
 	NOT IMPLEMENTED / NOT STABLE
 +/
-class DatagramListener {
+version(HasSocket) class DatagramListener {
 	// whenever a udp message arrives, it calls your callback
 	// can be on a specific thread or on any thread
 
@@ -3576,7 +5356,7 @@ class DatagramListener {
 /++
 	Just in case I decide to change the implementation some day.
 +/
-alias AsyncAnonymousPipe = AsyncFile;
+version(HasFile) alias AsyncAnonymousPipe = AsyncFile;
 
 
 // AsyncAnonymousPipe connectNamedPipe(AsyncAnonymousPipe preallocated, string name)
@@ -3593,7 +5373,7 @@ alias AsyncAnonymousPipe = AsyncFile;
 	History:
 		previously in minigui as a private function. Moved to arsd.core on April 3, 2023
 +/
-GetFilesResult getFiles(string directory, scope void delegate(string name, bool isDirectory) dg) {
+version(HasFile) GetFilesResult getFiles(string directory, scope void delegate(string name, bool isDirectory) dg) {
 	// FIXME: my buffers here aren't great lol
 
 	SavedArgument[1] argsForException() {
@@ -3617,6 +5397,14 @@ GetFilesResult getFiles(string directory, scope void delegate(string name, bool 
 		try_more:
 
 		string name = makeUtf8StringFromWindowsString(data.cFileName[0 .. findIndexOfZero(data.cFileName[])]);
+
+		/+
+  FILETIME ftLastWriteTime;
+  DWORD    nFileSizeHigh;
+  DWORD    nFileSizeLow;
+
+  but these not available on linux w/o statting each file!
+		+/
 
 		dg(name, (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? true : false);
 
@@ -3720,6 +5508,10 @@ package(arsd) int indexOf(scope const(char)[] haystack, scope const(char)[] need
 	return -1;
 }
 
+package(arsd) int indexOf(scope const(ubyte)[] haystack, scope const(char)[] needle) {
+	return indexOf(cast(const(char)[]) haystack, needle);
+}
+
 unittest {
 	assert("foo".indexOf("f") == 0);
 	assert("foo".indexOf("o") == 1);
@@ -3775,7 +5567,7 @@ class DirectoryWatcher {
 			ubyte[] buffer;
 
 			extern(Windows)
-			static void overlappedCompletionRoutine(DWORD dwErrorCode, DWORD dwNumberOfBytesTransferred, LPOVERLAPPED lpOverlapped) {
+			static void overlappedCompletionRoutine(DWORD dwErrorCode, DWORD dwNumberOfBytesTransferred, LPOVERLAPPED lpOverlapped) @system {
 				typeof(this) rr = cast(typeof(this)) (cast(void*) lpOverlapped - typeof(this).overlapped.offsetof);
 
 				// dwErrorCode
@@ -4064,14 +5856,16 @@ mixin template OverlappedIoRequest(Response, LowLevelOperation) {
 			OVERLAPPED overlapped;
 
 			extern(Windows)
-			static void overlappedCompletionRoutine(DWORD dwErrorCode, DWORD dwNumberOfBytesTransferred, LPOVERLAPPED lpOverlapped) {
+			static void overlappedCompletionRoutine(DWORD dwErrorCode, DWORD dwNumberOfBytesTransferred, LPOVERLAPPED lpOverlapped) @system {
 				typeof(this) rr = cast(typeof(this)) (cast(void*) lpOverlapped - typeof(this).overlapped.offsetof);
 
 				rr.response = typeof(rr.response)(SystemErrorCode(dwErrorCode), rr.llo.buffer[0 .. dwNumberOfBytesTransferred]);
 				rr.state_ = State.complete;
 
-				// FIXME: on complete?
+				if(rr.oncomplete)
+					rr.oncomplete(rr);
 
+				// FIXME: on complete?
 				// this will queue our CallbackHelper and that should be run at the end of the event loop after it is woken up by the APC run
 			}
 		}
@@ -4099,6 +5893,9 @@ mixin template OverlappedIoRequest(Response, LowLevelOperation) {
 				else
 					response = typeof(response)(SystemErrorCode(0), llo.buffer[0 .. cast(size_t) ret]);
 				state_ = State.complete;
+
+				if(oncomplete)
+					oncomplete(this);
 			}
 		}
 	}
@@ -4119,6 +5916,7 @@ mixin template OverlappedIoRequest(Response, LowLevelOperation) {
 		version(Windows) {
 			if(llo(&overlapped, &overlappedCompletionRoutine)) {
 				// all good, though GetLastError() might have some informative info
+				//writeln(GetLastError());
 			} else {
 				// operation failed, the operation is always ReadFileEx or WriteFileEx so it won't give the io pending thing here
 				// should i issue error async? idk
@@ -4134,7 +5932,10 @@ mixin template OverlappedIoRequest(Response, LowLevelOperation) {
 
 			auto errno = errno;
 			if(ret == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) { // unable to complete right now, register and try when it is ready
-				eventRegistration = getThisThreadEventLoop().addCallbackOnFdReadableOneShot(this.llo.file.handle, this.getCb);
+				if(eventRegistration is typeof(eventRegistration).init)
+					eventRegistration = getThisThreadEventLoop().addCallbackOnFdReadableOneShot(this.llo.file.handle, this.getCb);
+				else
+					eventRegistration.rearm();
 			} else {
 				// i could set errors sync or async and since it couldn't even start, i think a sync exception is the right way
 				if(ret == -1)
@@ -4143,7 +5944,6 @@ mixin template OverlappedIoRequest(Response, LowLevelOperation) {
 			}
 		}
 	}
-
 
 	override void cancel() {
 		if(state_ == State.complete)
@@ -4194,12 +5994,26 @@ mixin template OverlappedIoRequest(Response, LowLevelOperation) {
 
 		return response;
 	}
+
+	/++
+		Repeats the operation, restarting the request.
+
+		This must only be called when the operation has already completed.
+	+/
+	void repeat() {
+		if(state_ != State.complete)
+			throw new Exception("wrong use, cannot repeat if not complete");
+		state_ = State.unused;
+		start();
+	}
+
+	void delegate(typeof(this) t) oncomplete;
 }
 
 /++
 	You can write to a file asynchronously by creating one of these.
 +/
-final class AsyncWriteRequest : AsyncOperationRequest {
+version(HasSocket) final class AsyncWriteRequest : AsyncOperationRequest {
 	struct LowLevelOperation {
 		AsyncFile file;
 		ubyte[] buffer;
@@ -4250,10 +6064,17 @@ class AsyncWriteResponse : AsyncOperationResponse {
 	}
 }
 
+// FIXME: on Windows, you may want two operations outstanding at once
+// so there's no delay between sequential ops. this system currently makes that
+// impossible since epoll won't let you register twice...
+
+// FIXME: if an op completes synchronously, and oncomplete calls repeat
+// you can get infinite recursion into the stack...
+
 /++
 
 +/
-final class AsyncReadRequest : AsyncOperationRequest {
+version(HasSocket) final class AsyncReadRequest : AsyncOperationRequest {
 	struct LowLevelOperation {
 		AsyncFile file;
 		ubyte[] buffer;
@@ -4323,13 +6144,13 @@ class AsyncReadResponse : AsyncOperationResponse {
 		runHelperFunction() - whomever it reports to is the parent
 +/
 
-class ScheduableTask : Fiber {
+version(HasThread) class SchedulableTask : Fiber {
 	private void delegate() dg;
 
 	// linked list stuff
-	private static ScheduableTask taskRoot;
-	private ScheduableTask previous;
-	private ScheduableTask next;
+	private static SchedulableTask taskRoot;
+	private SchedulableTask previous;
+	private SchedulableTask next;
 
 	// need the controlling thread to know how to wake it up if it receives a message
 	private Thread controllingThread;
@@ -4414,23 +6235,23 @@ void delegate(Throwable t) taskUncaughtException;
 	History:
 		Added August 11, 2023 (dub v11.1)
 +/
-SchedulableTaskController inSchedulableTask() {
+version(HasThread) SchedulableTaskController inSchedulableTask() {
 	import core.thread.fiber;
 
 	if(auto fiber = Fiber.getThis) {
-		return SchedulableTaskController(cast(ScheduableTask) fiber);
+		return SchedulableTaskController(cast(SchedulableTask) fiber);
 	}
 
 	return SchedulableTaskController(null);
 }
 
 /// ditto
-struct SchedulableTaskController {
-	private this(ScheduableTask fiber) {
+version(HasThread) struct SchedulableTaskController {
+	private this(SchedulableTask fiber) {
 		this.fiber = fiber;
 	}
 
-	private ScheduableTask fiber;
+	private SchedulableTask fiber;
 
 	/++
 
@@ -4476,7 +6297,7 @@ class TaskCancelledException : object.Exception {
 	}
 }
 
-private class CoreWorkerThread : Thread {
+version(HasThread) private class CoreWorkerThread : Thread {
 	this(EventLoopType type) {
 		this.type = type;
 
@@ -4575,7 +6396,7 @@ private int numberOfCpus() {
 	Its destructor runs the event loop then waits to for the workers to finish to clean them up.
 +/
 // FIXME: single instance?
-struct ArsdCoreApplication {
+version(HasThread) struct ArsdCoreApplication {
 	private ICoreEventLoop impl;
 
 	/++
@@ -4629,12 +6450,39 @@ struct ArsdCoreApplication {
 
 
 private class CoreEventLoopImplementation : ICoreEventLoop {
+	version(EmptyEventLoop) RunOnceResult runOnce(Duration timeout = Duration.max) { return RunOnceResult(RunOnceResult.Possibilities.LocalExit); }
+	version(EmptyCoreEvent)
+	{
+		UnregisterToken addCallbackOnFdReadable(int fd, CallbackHelper cb){return typeof(return).init;}
+		RearmToken addCallbackOnFdReadableOneShot(int fd, CallbackHelper cb){return typeof(return).init;}
+		RearmToken addCallbackOnFdWritableOneShot(int fd, CallbackHelper cb){return typeof(return).init;}
+		private void rearmFd(RearmToken token) {}
+	}
+
+
+	private {
+		static struct LoopIterationDelegate {
+			void delegate() dg;
+			uint flags;
+		}
+		LoopIterationDelegate[] loopIterationDelegates;
+
+		void runLoopIterationDelegates() {
+			foreach(lid; loopIterationDelegates)
+				lid.dg();
+		}
+	}
+
+	void addDelegateOnLoopIteration(void delegate() dg, uint timingFlags) {
+		loopIterationDelegates ~= LoopIterationDelegate(dg, timingFlags);
+	}
 
 	version(Arsd_core_kqueue) {
 		// this thread apc dispatches go as a custom event to the queue
 		// the other queues go through one byte at a time pipes (barf). freebsd 13 and newest nbsd have eventfd too tho so maybe i can use them but the other kqueue systems don't.
 
-		void runOnce() {
+		RunOnceResult runOnce(Duration timeout = Duration.max) {
+			scope(exit) eventLoopRound++;
 			kevent_t[16] ev;
 			//timespec tout = timespec(1, 0);
 			auto nev = kevent(kqueuefd, null, 0, ev.ptr, ev.length, null/*&tout*/);
@@ -4656,6 +6504,10 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 					}
 				}
 			}
+
+			runLoopIterationDelegates();
+
+			return RunOnceResult(RunOnceResult.Possibilities.CarryOn);
 		}
 
 		// FIXME: idk how to make one event that multiple kqueues can listen to w/o being shared
@@ -4774,12 +6626,32 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 		__gshared HANDLE iocpWorkers;
 
 		HANDLE[] handles;
+		CallbackHelper[] handlesCbs;
+
+		void unregisterHandle(HANDLE handle, CallbackHelper cb) {
+			foreach(idx, h; handles)
+				if(h is handle && handlesCbs[idx] is cb) {
+					handles[idx] = handles[$-1];
+					handles = handles[0 .. $-1].assumeSafeAppend;
+
+					handlesCbs[idx] = handlesCbs[$-1];
+					handlesCbs = handlesCbs[0 .. $-1].assumeSafeAppend;
+				}
+		}
+
+		UnregisterToken addCallbackOnHandleReady(HANDLE handle, CallbackHelper cb) {
+			handles ~= handle;
+			handlesCbs ~= cb;
+
+			return UnregisterToken(this, handle, cb);
+		}
 
 		// i think to terminate i just have to post the message at least once for every thread i know about, maybe a few more times for threads i don't know about.
 
 		bool isWorker; // if it is a worker we wait on the iocp, if not we wait on msg
 
-		void runOnce() {
+		RunOnceResult runOnce(Duration timeout = Duration.max) {
+			scope(exit) eventLoopRound++;
 			if(isWorker) {
 				// this function is only supported on Windows Vista and up, so using this
 				// means dropping support for XP.
@@ -4797,7 +6669,8 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 				enum WAIT_OBJECT_0 = 0;
 				if(waitResult >= WAIT_OBJECT_0 && waitResult < handles.length + WAIT_OBJECT_0) {
 					auto h = handles[waitResult - WAIT_OBJECT_0];
-					// FIXME: run the handle ready callback
+					auto cb = handlesCbs[waitResult - WAIT_OBJECT_0];
+					cb.call();
 				} else if(waitResult == handles.length + WAIT_OBJECT_0) {
 					// message ready
 					int count;
@@ -4814,9 +6687,7 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 							break; // take the opportunity to catch up on other events
 
 						if(ret == 0) { // WM_QUIT
-							// EventLoop.quitApplication();
-							assert(0); // FIXME
-							//break;
+							exitApplication();
 						}
 					}
 				} else if(waitResult == 0x000000C0L /* WAIT_IO_COMPLETION */) {
@@ -4830,6 +6701,10 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 					// idk....
 				}
 			}
+
+			runLoopIterationDelegates();
+
+			return RunOnceResult(RunOnceResult.Possibilities.CarryOn);
 		}
 	}
 
@@ -5111,13 +6986,14 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 		// the any thread poll is just registered in the this thread poll w/ exclusive. nobody actaully epoll_waits
 		// on the global one directly.
 
-		void runOnce() {
+		RunOnceResult runOnce(Duration timeout = Duration.max) {
+			scope(exit) eventLoopRound++;
 			epoll_event[16] events;
 			auto ret = epoll_wait(epollfd, events.ptr, cast(int) events.length, -1); // FIXME: timeout
 			if(ret == -1) {
 				import core.stdc.errno;
 				if(errno == EINTR) {
-					return;
+					return RunOnceResult(RunOnceResult.Possibilities.Interrupted);
 				}
 				throw new ErrnoApiException("epoll_wait", errno);
 			} else if(ret == 0) {
@@ -5134,6 +7010,10 @@ private class CoreEventLoopImplementation : ICoreEventLoop {
 					cbObject.call();
 				}
 			}
+
+			runLoopIterationDelegates();
+
+			return RunOnceResult(RunOnceResult.Possibilities.CarryOn);
 		}
 
 		// building blocks for low-level integration with the loop
@@ -5558,7 +7438,7 @@ class WritableStream {
 
 	It reads binary data.
 +/
-class ReadableStream {
+version(HasThread) class ReadableStream {
 
 	this() {
 
@@ -5645,17 +7525,26 @@ class ReadableStream {
 
 	/// ditto
 	final T get(T : E[], E)(scope bool delegate(E e) isTerminatingSentinel, ByteOrder elementByteOrder = ByteOrder.irrelevant, string file = __FILE__, size_t line = __LINE__) {
-		if(byteOrder == ByteOrder.irrelevant && E.sizeof > 1)
+		if(elementByteOrder == ByteOrder.irrelevant && E.sizeof > 1)
 			throw new InvalidArgumentsException("elementByteOrder", "byte order must be specified for type " ~ E.stringof ~ " because it is bigger than one byte", "ReadableStream.get", file, line);
 
-		assert(0, "Not implemented");
+		T ret;
+
+		do {
+			try
+				ret ~= get!E(elementByteOrder);
+			catch(ArsdException!"is already closed" ae)
+				return ret;
+		} while(!isTerminatingSentinel(ret[$-1]));
+
+		return ret[0 .. $-1]; // cut off the terminating sentinel
 	}
 
 	/++
 
 	+/
 	bool isClosed() {
-		return isClosed_;
+		return isClosed_ && currentBuffer.length == 0 && leftoverBuffer.length == 0;
 	}
 
 	// Control side of things
@@ -5686,6 +7575,9 @@ class ReadableStream {
 		You basically have to use this thing from a task
 	+/
 	protected void waitForAdditionalData() {
+		if(isClosed_)
+			throw ArsdException!("is already closed")();
+
 		Fiber task = Fiber.getThis;
 
 		assert(task !is null);
@@ -5783,9 +7675,6 @@ unittest {
 	---
 
 	Please note that this does not currently and I have no plans as of this writing to add support for any kind of direct file descriptor passing. It always pipes them back to the parent for processing. If you don't want this, call the lower level functions yourself; the reason this class is here is to aid integration in the arsd.core event loop. Of course, I might change my mind on this.
-
-	Bugs:
-		Not implemented at all on Windows yet.
 +/
 class ExternalProcess /*: AsyncOperationRequest*/ {
 
@@ -5802,8 +7691,7 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 			synchronized(typeid(ExternalProcess)) {
 				if(pid in activeChildren) {
 					auto ac = activeChildren[pid];
-					ac.completed = true;
-					ac.status = status;
+					ac.markComplete(status);
 					activeChildren.remove(pid);
 				}
 			}
@@ -5815,13 +7703,18 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 	/++
 		This is the native version for Windows.
 	+/
-	this(string program, string commandLine) {
+	version(Windows)
+	this(FilePath program, string commandLine) {
 		version(Posix) {
 			assert(0, "not implemented command line to posix args yet");
+		} else version(Windows) {
+			this.program = program;
+			this.commandLine = commandLine;
 		}
 		else throw new NotYetImplementedException();
 	}
 
+	/+
 	this(string commandLine) {
 		version(Posix) {
 			assert(0, "not implemented command line to posix args yet");
@@ -5836,10 +7729,12 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 		}
 		else throw new NotYetImplementedException();
 	}
+	+/
 
 	/++
 		This is the native version for Posix.
 	+/
+	version(Posix)
 	this(FilePath program, string[] args) {
 		version(Posix) {
 			this.program = program;
@@ -5848,12 +7743,13 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 		else throw new NotYetImplementedException();
 	}
 
-	// you can modify these before calling start
-	int stdoutBufferSize = 32 * 1024;
-	int stderrBufferSize = 8 * 1024;
+	/++
 
+	+/
 	void start() {
 		version(Posix) {
+			getThisThreadEventLoop(); // ensure it is initialized
+
 			int ret;
 
 			int[2] stdinPipes;
@@ -5866,7 +7762,7 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 				close(stdinPipes[1]);
 			}
 
-			stdinFd = stdinPipes[1];
+			auto stdinFd = stdinPipes[1];
 
 			int[2] stdoutPipes;
 			ret = pipe(stdoutPipes);
@@ -5878,7 +7774,7 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 				close(stdoutPipes[1]);
 			}
 
-			stdoutFd = stdoutPipes[0];
+			auto stdoutFd = stdoutPipes[0];
 
 			int[2] stderrPipes;
 			ret = pipe(stderrPipes);
@@ -5890,7 +7786,7 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 				close(stderrPipes[1]);
 			}
 
-			stderrFd = stderrPipes[0];
+			auto stderrFd = stderrPipes[0];
 
 
 			int[2] errorReportPipes;
@@ -6014,107 +7910,165 @@ class ExternalProcess /*: AsyncOperationRequest*/ {
 
 				ErrnoEnforce!close(errorReportPipes[0]);
 
-				// and now register the ones we need to read with the event loop so it can call the callbacks
-				// also need to listen to SIGCHLD to queue up the terminated callback. FIXME
+				makeNonBlocking(stdinFd);
+				makeNonBlocking(stdoutFd);
+				makeNonBlocking(stderrFd);
 
-				stdoutUnregisterToken = getThisThreadEventLoop().addCallbackOnFdReadable(stdoutFd, new CallbackHelper(&stdoutReadable));
-				stderrUnregisterToken = getThisThreadEventLoop().addCallbackOnFdReadable(stderrFd, new CallbackHelper(&stderrReadable));
+				_stdin = new AsyncFile(stdinFd);
+				_stdout = new AsyncFile(stdoutFd);
+				_stderr = new AsyncFile(stderrFd);
 			}
+		} else version(Windows) {
+			WCharzBuffer program = this.program.path;
+			WCharzBuffer cmdLine = this.commandLine;
+
+			PROCESS_INFORMATION pi;
+			STARTUPINFOW startupInfo;
+
+			SECURITY_ATTRIBUTES saAttr;
+			saAttr.nLength = SECURITY_ATTRIBUTES.sizeof;
+			saAttr.bInheritHandle = true;
+			saAttr.lpSecurityDescriptor = null;
+
+			HANDLE inreadPipe;
+			HANDLE inwritePipe;
+			if(MyCreatePipeEx(&inreadPipe, &inwritePipe, &saAttr, 0, 0, FILE_FLAG_OVERLAPPED) == 0)
+				throw new WindowsApiException("CreatePipe", GetLastError());
+			if(!SetHandleInformation(inwritePipe, 1/*HANDLE_FLAG_INHERIT*/, 0))
+				throw new WindowsApiException("SetHandleInformation", GetLastError());
+
+			HANDLE outreadPipe;
+			HANDLE outwritePipe;
+			if(MyCreatePipeEx(&outreadPipe, &outwritePipe, &saAttr, 0, FILE_FLAG_OVERLAPPED, 0) == 0)
+				throw new WindowsApiException("CreatePipe", GetLastError());
+			if(!SetHandleInformation(outreadPipe, 1/*HANDLE_FLAG_INHERIT*/, 0))
+				throw new WindowsApiException("SetHandleInformation", GetLastError());
+
+			HANDLE errreadPipe;
+			HANDLE errwritePipe;
+			if(MyCreatePipeEx(&errreadPipe, &errwritePipe, &saAttr, 0, FILE_FLAG_OVERLAPPED, 0) == 0)
+				throw new WindowsApiException("CreatePipe", GetLastError());
+			if(!SetHandleInformation(errreadPipe, 1/*HANDLE_FLAG_INHERIT*/, 0))
+				throw new WindowsApiException("SetHandleInformation", GetLastError());
+
+			startupInfo.cb = startupInfo.sizeof;
+			startupInfo.dwFlags = STARTF_USESTDHANDLES;
+			startupInfo.hStdInput = inreadPipe;
+			startupInfo.hStdOutput = outwritePipe;
+			startupInfo.hStdError = errwritePipe;
+
+			auto result = CreateProcessW(
+				program.ptr,
+				cmdLine.ptr,
+				null, // process attributes
+				null, // thread attributes
+				true, // inherit handles; necessary for the std in/out/err ones to work
+				0, // dwCreationFlags FIXME might be useful to change
+				null, // environment, might be worth changing
+				null, // current directory
+				&startupInfo,
+				&pi
+			);
+
+			if(!result)
+				throw new WindowsApiException("CreateProcessW", GetLastError());
+
+			_stdin = new AsyncFile(inwritePipe);
+			_stdout = new AsyncFile(outreadPipe);
+			_stderr = new AsyncFile(errreadPipe);
+
+			Win32Enforce!CloseHandle(inreadPipe);
+			Win32Enforce!CloseHandle(outwritePipe);
+			Win32Enforce!CloseHandle(errwritePipe);
+
+			Win32Enforce!CloseHandle(pi.hThread);
+
+			handle = pi.hProcess;
+
+			procRegistration = getThisThreadEventLoop.addCallbackOnHandleReady(handle, new CallbackHelper(&almostComplete));
 		}
 	}
 
-	private version(Posix) {
+	version(Windows) {
+		private HANDLE handle;
+		private FilePath program;
+		private string commandLine;
+		private ICoreEventLoop.UnregisterToken procRegistration;
+
+		private final void almostComplete() {
+			// GetProcessTimes lol
+			Win32Enforce!GetExitCodeProcess(handle, cast(uint*) &_status);
+
+			markComplete(_status);
+
+			procRegistration.unregister();
+			CloseHandle(handle);
+			this.completed = true;
+		}
+	} else version(Posix) {
 		import core.sys.posix.unistd;
 		import core.sys.posix.fcntl;
 
-		int stdinFd = -1;
-		int stdoutFd = -1;
-		int stderrFd = -1;
-
-		ICoreEventLoop.UnregisterToken stdoutUnregisterToken;
-		ICoreEventLoop.UnregisterToken stderrUnregisterToken;
-
-		pid_t pid = -1;
+		private pid_t pid = -1;
 
 		public void delegate() beforeExec;
 
-		FilePath program;
-		string[] args;
-
-		void stdoutReadable() {
-			if(stdoutReadBuffer is null)
-				stdoutReadBuffer = new ubyte[](stdoutBufferSize);
-			auto ret = read(stdoutFd, stdoutReadBuffer.ptr, stdoutReadBuffer.length);
-			if(ret == -1)
-				throw new ErrnoApiException("read", errno);
-			if(onStdoutAvailable) {
-				onStdoutAvailable(stdoutReadBuffer[0 .. ret]);
-			}
-
-			if(ret == 0) {
-				stdoutUnregisterToken.unregister();
-
-				close(stdoutFd);
-				stdoutFd = -1;
-			}
-		}
-
-		void stderrReadable() {
-			if(stderrReadBuffer is null)
-				stderrReadBuffer = new ubyte[](stderrBufferSize);
-			auto ret = read(stderrFd, stderrReadBuffer.ptr, stderrReadBuffer.length);
-			if(ret == -1)
-				throw new ErrnoApiException("read", errno);
-			if(onStderrAvailable) {
-				onStderrAvailable(stderrReadBuffer[0 .. ret]);
-			}
-
-			if(ret == 0) {
-				stderrUnregisterToken.unregister();
-
-				close(stderrFd);
-				stderrFd = -1;
-			}
-		}
+		private FilePath program;
+		private string[] args;
 	}
 
-	private ubyte[] stdoutReadBuffer;
-	private ubyte[] stderrReadBuffer;
+	private final void markComplete(int status) {
+		completed = true;
+		_status = status;
 
+		if(oncomplete)
+			oncomplete(this);
+	}
+
+
+	private AsyncFile _stdin;
+	private AsyncFile _stdout;
+	private AsyncFile _stderr;
+
+	/++
+
+	+/
+	AsyncFile stdin() {
+		return _stdin;
+	}
+	/// ditto
+	AsyncFile stdout() {
+		return _stdout;
+	}
+	/// ditto
+	AsyncFile stderr() {
+		return _stderr;
+	}
+
+	/++
+	+/
 	void waitForCompletion() {
 		getThisThreadEventLoop().run(&this.isComplete);
 	}
 
+	/++
+	+/
 	bool isComplete() {
 		return completed;
 	}
 
-	bool completed;
-	int status = int.min;
+	private bool completed;
+	private int _status = int.min;
 
 	/++
-		If blocking, it will block the current task until the write succeeds.
-
-		Write `null` as data to close the pipe. Once the pipe is closed, you must not try to write to it again.
 	+/
-	void writeToStdin(in void[] data) {
-		version(Posix) {
-			if(data is null) {
-				close(stdinFd);
-				stdinFd = -1;
-			} else {
-				// FIXME: check the return value again and queue async writes
-				auto ret = write(stdinFd, data.ptr, data.length);
-				if(ret == -1)
-					throw new ErrnoApiException("write", errno);
-			}
-		}
-
+	int status() {
+		return _status;
 	}
 
-	void delegate(ubyte[] got) onStdoutAvailable;
-	void delegate(ubyte[] got) onStderrAvailable;
-	void delegate(int code) onTermination;
+	// void delegate(int code) onTermination;
+
+	void delegate(ExternalProcess) oncomplete;
 
 	// pty?
 }
@@ -6186,6 +8140,596 @@ unittest {
 }
 
 /+
+	================
+	LOGGER FRAMEWORK
+	================
++/
+/++
+	DO NOT USE THIS YET IT IS NOT FUNCTIONAL NOR STABLE
+
+
+	The arsd.core logger works differently than many in that it works as a ring buffer of objects that are consumed (or missed; buffer overruns are possible) by a different thread instead of strings written to some file.
+
+	A library (or an application) defines a log source. They write to this source.
+
+	Applications then define log listeners, zero or more, which reads from various sources and does something with them.
+
+	Log calls, in this sense, are quite similar to asynchronous events that can be subscribed to by event handlers. The difference is events are generally not dropped - they might coalesce but are usually not just plain dropped in a buffer overrun - whereas logs can be. If the log consumer can't keep up, the details are just lost. The log producer will not wait for the consumer to catch up.
+
+
+	An application can also set a default subscriber which applies to all log objects throughout.
+
+	All log message objects must be capable of being converted to strings and to json.
+
+	Ad-hoc messages can be done with interpolated sequences.
+
+	Messages automatically get a timestamp. They can also have file/line and maybe even a call stack.
+
+	Examples:
+	---
+		auto logger = new shared LoggerOf!GenericEmbeddableInterpolatedSequence;
+
+		mylogger.info(i"$this heartbeat");
+	---
+
+	History:
+		Added May 27, 2024
+
+		Not actually implemented until February 6, 2025, when it changed from mixin template to class.
++/
+class LoggerOf(T, size_t bufferSize = 16) {
+	private LoggedMessage!T[bufferSize] ring;
+	private ulong writeBufferPosition;
+
+	import core.sync.mutex;
+	import core.sync.condition;
+
+	private Mutex mutex;
+	private Condition condition;
+	private bool active;
+	private int listenerCount;
+
+	this() shared {
+		mutex = new shared Mutex(cast(LoggerOf) this);
+		condition = new shared Condition(mutex);
+		active = true;
+	}
+
+	/++
+		Closes the log channel and waits for all listeners to finish pending work before returning.
+
+		Once the logger is closed, it cannot be used again.
+
+		You should close any logger you attached listeners to before returning from `main()`.
+	+/
+	void close() shared {
+		synchronized(this) {
+			active = false;
+			condition.notifyAll();
+
+			while(listenerCount > 0) {
+				condition.wait();
+			}
+		}
+	}
+
+	/++
+
+		Examples:
+
+		---
+		// to write all messages to the console
+		logger.addListener((message, missedMessageCount) {
+			writeln(message);
+		});
+		---
+
+		---
+		// to only write warnings and errors
+		logger.addListener((message, missedMessageCount) {
+			if(message.level >= LogLevel.warn)
+				writeln(message);
+		});
+		---
+
+		---
+		// to ignore messages from arsd.core
+		logger.addListener((message, missedMessageCount) {
+			if(message.sourceLocation.moduleName != "arsd.core")
+				writeln(message);
+		});
+		---
+	+/
+	LogListenerController addListener(void delegate(LoggedMessage!T message, int missedMessages) dg) shared {
+		static class Listener : Thread, LogListenerController {
+			shared LoggerOf logger;
+			ulong readBufferPosition;
+			void delegate(LoggedMessage!T, int) dg;
+
+			bool connected;
+
+			import core.sync.event;
+			Event event;
+
+			this(shared LoggerOf logger, void delegate(LoggedMessage!T msg, int) dg) {
+				this.dg = dg;
+				this.logger = logger;
+				this.connected = true;
+				this.isDaemon = true;
+
+				auto us = cast(LoggerOf) logger;
+				synchronized(logger)
+					us.listenerCount++;
+
+				event.initialize(true, false);
+				super(&run);
+			}
+
+			void disconnect() {
+				this.connected = false;
+			}
+
+			void run() {
+				auto us = cast(LoggerOf) logger;
+				/+
+				// can't do this due to https://github.com/ldc-developers/ldc/issues/4837
+				// so doing the try/catch below and putting this under it
+				scope(exit) {
+					synchronized(logger) {
+						us.listenerCount--;
+						logger.condition.notifyAll();
+					}
+					// mark us as complete for other listeners waiting as well
+					event.set();
+				}
+				+/
+
+				try {
+
+					LoggedMessage!T[bufferSize] buffer;
+					do {
+						int missedMessages = 0;
+						long n;
+						synchronized(logger) {
+							while(logger.active && connected && logger.writeBufferPosition < readBufferPosition) {
+								logger.condition.wait();
+							}
+
+							n = us.writeBufferPosition - readBufferPosition;
+							if(n > bufferSize) {
+								// we missed something...
+								missedMessages = cast(int) (n - bufferSize);
+								readBufferPosition = us.writeBufferPosition - bufferSize;
+								n = bufferSize;
+							}
+							auto startPos = readBufferPosition % bufferSize;
+							auto endPos = us.writeBufferPosition % bufferSize;
+							if(endPos > startPos) {
+								buffer[0 .. cast(size_t) n] = us.ring[cast(size_t) startPos .. cast(size_t) endPos];
+							} else {
+								auto ourSplit = us.ring.length - startPos;
+								buffer[0 .. cast(size_t) ourSplit] = us.ring[cast(size_t) startPos .. $];
+								buffer[cast(size_t) ourSplit .. cast(size_t) (ourSplit + endPos)] = us.ring[0 .. cast(size_t) endPos];
+							}
+							readBufferPosition = us.writeBufferPosition;
+						}
+						foreach(item; buffer[0 .. cast(size_t) n]) {
+							if(!connected)
+								break;
+							dg(item, missedMessages);
+							missedMessages = 0;
+						}
+					} while(logger.active && connected);
+
+				} catch(Throwable t) {
+					// i guess i could try to log the exception for other listeners to pick up...
+
+				}
+
+				synchronized(logger) {
+					us.listenerCount--;
+					logger.condition.notifyAll();
+				}
+				// mark us as complete for other listeners waiting as well
+				event.set();
+
+			}
+
+			void waitForCompletion() {
+				event.wait();
+			}
+		}
+
+		auto listener = new Listener(this, dg);
+		listener.start();
+
+		return listener;
+	}
+
+	void log(LoggedMessage!T message) shared {
+		synchronized(this) {
+			auto unshared = cast() this;
+			unshared.ring[writeBufferPosition % bufferSize] = message;
+			unshared.writeBufferPosition += 1;
+
+			// import std.stdio; std.stdio.writeln(message);
+			condition.notifyAll();
+		}
+	}
+
+	/// ditto
+	void log(LogLevel level, T message, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+		import core.stdc.time;
+		log(LoggedMessage!T(level, sourceLocation, SimplifiedUtcTimestamp.fromUnixTime(time(null)), Thread.getThis(), message));
+	}
+
+	/// ditto
+	void info(T message, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+		log(LogLevel.info, message, sourceLocation);
+	}
+	/// ditto
+	void trace(T message, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+		log(LogLevel.trace, message, sourceLocation);
+	}
+	/// ditto
+	void warn(T message, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+		log(LogLevel.warn, message, sourceLocation);
+	}
+	/// ditto
+	void error(T message, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+		log(LogLevel.error, message, sourceLocation);
+	}
+
+	static if(is(T == GenericEmbeddableInterpolatedSequence)) {
+		pragma(inline, true)
+		final void info(T...)(InterpolationHeader header, T message, InterpolationFooter footer, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+			log(LogLevel.info, GenericEmbeddableInterpolatedSequence(header, message, footer), sourceLocation);
+		}
+		pragma(inline, true)
+		final void trace(T...)(InterpolationHeader header, T message, InterpolationFooter footer, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+			log(LogLevel.trace, GenericEmbeddableInterpolatedSequence(header, message, footer), sourceLocation);
+		}
+		pragma(inline, true)
+		final void warn(T...)(InterpolationHeader header, T message, InterpolationFooter footer, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+			log(LogLevel.warn, GenericEmbeddableInterpolatedSequence(header, message, footer), sourceLocation);
+		}
+		pragma(inline, true)
+		final void error(T...)(InterpolationHeader header, T message, InterpolationFooter footer, SourceLocation sourceLocation = SourceLocation(__MODULE__, __LINE__)) shared {
+			log(LogLevel.error, GenericEmbeddableInterpolatedSequence(header, message, footer), sourceLocation);
+		}
+	}
+}
+
+/// ditto
+interface LogListenerController {
+	/++
+		Disconnects from the log producer as soon as possible, possibly leaving messages
+		behind in the log buffer. Once disconnected, the log listener will terminate
+		asynchronously and cannot be reused. Use [waitForCompletion] to block your thread
+		until the termination is complete.
+	+/
+	void disconnect();
+
+	/++
+		Waits for the listener to finish its pending work and terminate. You should call
+		[disconnect] first to make it start to exit.
+	+/
+	void waitForCompletion();
+}
+
+/// ditto
+struct SourceLocation {
+	string moduleName;
+	size_t line;
+}
+
+/// ditto
+struct LoggedMessage(T) {
+	LogLevel level;
+	SourceLocation sourceLocation;
+	SimplifiedUtcTimestamp timestamp;
+	Thread originatingThread;
+	T message;
+
+	// process id can be assumed by the listener,
+	// since it is always the same; logs are sent and received by the same process.
+
+	string toString() {
+		string ret;
+
+		ret ~= sourceLocation.moduleName;
+		ret ~= ":";
+		ret ~= toStringInternal(sourceLocation.line);
+		ret ~= " ";
+		if(originatingThread) {
+			char[16] buffer;
+			ret ~= originatingThread.name.length ? originatingThread.name : intToString(cast(long) originatingThread.id, buffer, IntToStringArgs().withRadix(16));
+		}
+		ret ~= "[";
+		ret ~= toStringInternal(level);
+		ret ~= "] ";
+		ret ~= timestamp.toString();
+		ret ~= " ";
+		ret ~= message.toString();
+
+		return ret;
+	}
+	// callstack?
+}
+
+/// ditto
+enum LogLevel {
+	trace,
+	info,
+	warn,
+	error,
+}
+
+private shared(LoggerOf!GenericEmbeddableInterpolatedSequence) _commonLogger;
+shared(LoggerOf!GenericEmbeddableInterpolatedSequence) logger() {
+	if(_commonLogger is null) {
+		synchronized {
+			if(_commonLogger is null)
+				_commonLogger = new shared LoggerOf!GenericEmbeddableInterpolatedSequence;
+		}
+	}
+
+	return _commonLogger;
+}
+
+/+
+// using this requires a newish compiler so we just uncomment when necessary
+unittest {
+	void main() {
+		auto logger = logger;// new shared LoggerOf!GenericEmbeddableInterpolatedSequence;
+		LogListenerController l1;
+		l1 = logger.addListener((msg, missedCount) {
+			if(missedCount)
+				writeln("T1: missed ", missedCount);
+			writeln("T1:" ~msg.toString());
+			//Thread.sleep(500.msecs);
+			//l1.disconnect();
+				Thread.sleep(1.msecs);
+		});
+		foreach(n; 0 .. 200) {
+			logger.info(i"hello world $n");
+			if(n % 6 == 0)
+				Thread.sleep(1.msecs);
+		}
+
+		logger.addListener((msg, missedCount) {
+			if(missedCount) writeln("T2 missed ", missedCount);
+			writeln("T2:" ~msg.toString());
+		});
+
+		Thread.sleep(500.msecs);
+		l1.disconnect;
+		l1.waitForCompletion;
+
+		logger.close();
+	}
+	//main;
+}
++/
+
+/+
+	=====================
+	TRANSLATION FRAMEWORK
+	=====================
++/
+
+/++
+	Represents a translatable string.
+
+
+	This depends on interpolated expression sequences to be ergonomic to use and in most cases, a function that uses this should take it as `tstring name...`; a typesafe variadic (this is also why it is a class rather than a struct - D only supports this particular feature on classes).
+
+	You can use `null` as a tstring. You can also construct it with UFCS: `i"foo".tstring`.
+
+	The actual translation engine should be set on the application level.
+
+	It is possible to get all translatable string templates compiled into the application at runtime.
+
+	History:
+		Added June 23, 2024
++/
+class tstring {
+	private GenericEmbeddableInterpolatedSequence geis;
+
+	/++
+		For a case where there is no plural specialization.
+	+/
+	this(Args...)(InterpolationHeader hdr, Args args, InterpolationFooter ftr) {
+		geis = GenericEmbeddableInterpolatedSequence(hdr, args, ftr);
+		tstringTemplateProcessor!(Args.length, Args) tp;
+	}
+
+	/+
+	/++
+		When here is a plural specialization this passes the default one.
+	+/
+	this(SArgs..., Pargs...)(
+		InterpolationHeader shdr, SArgs singularArgs, InterpolationFooter sftr,
+		InterpolationHeader phdr, PArgs pluralArgs, InterpolationFooter pftr
+	)
+	{
+		geis = GenericEmbeddableInterpolatedSequence(shdr, singularArgs, sftr);
+		//geis = GenericEmbeddableInterpolatedSequence(phdr, pluralArgs, pftr);
+
+		tstringTemplateProcessor!(Args.length, Args) tp;
+	}
+	+/
+
+	final override string toString() {
+		if(this is null)
+			return null;
+		if(translationEngine !is null)
+			return translationEngine.translate(geis);
+		else
+			return geis.toString();
+	}
+
+	static tstring opCall(Args...)(InterpolationHeader hdr, Args args, InterpolationFooter ftr) {
+		return new tstring(hdr, args, ftr);
+	}
+
+	/+ +++ +/
+
+	private static shared(TranslationEngine) translationEngine_ = null;
+
+	static shared(TranslationEngine) translationEngine() {
+		return translationEngine_;
+	}
+
+	static void translationEngine(shared TranslationEngine e) {
+		translationEngine_ = e;
+		if(e !is null) {
+			auto item = first;
+			while(item) {
+				e.handleTemplate(*item);
+				item = item.next;
+			}
+		}
+	}
+
+	public struct TranslatableElement {
+		string templ;
+		string pluralTempl;
+
+		TranslatableElement* next;
+	}
+
+	static __gshared TranslatableElement* first;
+
+	// FIXME: the template should be identified to the engine somehow
+
+	private static enum templateStringFor(Args...) = () {
+		int count;
+		string templ;
+		foreach(arg; Args) {
+			static if(is(arg == InterpolatedLiteral!str, string str))
+				templ ~= str;
+			else static if(is(arg == InterpolatedExpression!code, string code))
+				templ ~= "{" ~ cast(char)(++count + '0') ~ "}";
+		}
+		return templ;
+	}();
+
+	// this is here to inject static ctors so we can build up a runtime list from ct data
+	private static struct tstringTemplateProcessor(size_t pluralBegins, Args...) {
+		static __gshared TranslatableElement e = TranslatableElement(
+			templateStringFor!(Args[0 .. pluralBegins]),
+			templateStringFor!(Args[pluralBegins .. $]),
+			null /* next, filled in by the static ctor below */);
+
+		@standalone @system
+		shared static this() {
+			e.next = first;
+			first = &e;
+		}
+	}
+}
+
+/// ditto
+class TranslationEngine {
+	string translate(GenericEmbeddableInterpolatedSequence geis) shared {
+		return geis.toString();
+	}
+
+	/++
+		If the translation engine has been set early in the module
+		construction process (which it should be!)
+	+/
+	void handleTemplate(tstring.TranslatableElement t) shared {
+	}
+}
+
+private static template WillFitInGeis(Args...) {
+	static int lengthRequired() {
+		int place;
+		foreach(arg; Args) {
+			static if(is(arg == InterpolatedLiteral!str, string str)) {
+				if(place & 1) // can't put string in the data slot
+					place++;
+				place++;
+			} else static if(is(arg == InterpolationHeader) || is(arg == InterpolationFooter) || is(arg == InterpolatedExpression!code, string code)) {
+				// no storage required
+			} else {
+				if((place & 1) == 0) // can't put data in the string slot
+					place++;
+				place++;
+			}
+		}
+
+		if(place & 1)
+			place++;
+		return place / 2;
+	}
+
+	enum WillFitInGeis = lengthRequired() <= GenericEmbeddableInterpolatedSequence.seq.length;
+}
+
+
+/+
+	For making an array of istrings basically; it moves their CT magic to RT dynamic type.
++/
+struct GenericEmbeddableInterpolatedSequence {
+	static struct Element {
+		string str; // these are pointers to string literals every time
+		LimitedVariant lv;
+	}
+
+	Element[8] seq;
+
+	this(Args...)(InterpolationHeader, Args args, InterpolationFooter) {
+		int place;
+		bool stringUsedInPlace;
+		bool overflowed;
+
+		static assert(WillFitInGeis!(Args), "Your interpolated elements will not fit in the generic buffer.");
+
+		foreach(arg; args) {
+			static if(is(typeof(arg) == InterpolatedLiteral!str, string str)) {
+				if(stringUsedInPlace) {
+					place++;
+					stringUsedInPlace = false;
+				}
+
+				if(place == seq.length) {
+					overflowed = true;
+					break;
+				}
+				seq[place].str = str;
+				stringUsedInPlace = true;
+			} else static if(is(typeof(arg) == InterpolationHeader) || is(typeof(arg) == InterpolationFooter)) {
+				static assert(0, "Cannot embed interpolated sequences");
+			} else static if(is(typeof(arg) == InterpolatedExpression!code, string code)) {
+				// irrelevant
+			} else {
+				if(place == seq.length) {
+					overflowed = true;
+					break;
+				}
+				seq[place].lv = LimitedVariant(arg);
+				place++;
+				stringUsedInPlace = false;
+			}
+		}
+	}
+
+	string toString() {
+		string s;
+		foreach(item; seq) {
+			if(item.str !is null)
+				s ~= item.str;
+			if(!item.lv.containsNull())
+				s ~= item.lv.toString();
+		}
+		return s;
+	}
+}
+
+/+
 	=================
 	STDIO REPLACEMENT
 	=================
@@ -6213,20 +8757,57 @@ private void appendToBuffer(ref char[] buffer, ref int pos, long what) {
 
 	This always does text. See also WritableStream and WritableTextStream when they are implemented.
 +/
-void writeln(T...)(T t) {
+void writeln(bool printInterpolatedCode = false, T...)(T t) {
 	char[256] bufferBacking;
 	char[] buffer = bufferBacking[];
 	int pos;
 
 	foreach(arg; t) {
-		static if(is(typeof(arg) : const char[])) {
+		static if(is(typeof(arg) Base == enum)) {
+			appendToBuffer(buffer, pos, typeof(arg).stringof);
+			appendToBuffer(buffer, pos, ".");
+			appendToBuffer(buffer, pos, toStringInternal(arg));
+			appendToBuffer(buffer, pos, "(");
+			appendToBuffer(buffer, pos, cast(Base) arg);
+			appendToBuffer(buffer, pos, ")");
+		} else static if(is(typeof(arg) : const char[])) {
 			appendToBuffer(buffer, pos, arg);
 		} else static if(is(typeof(arg) : stringz)) {
 			appendToBuffer(buffer, pos, arg.borrow);
 		} else static if(is(typeof(arg) : long)) {
 			appendToBuffer(buffer, pos, arg);
+		} else static if(is(typeof(arg) : double)) {
+			import core.stdc.stdio;
+			char[128] fb;
+			auto count = snprintf(fb.ptr, fb.length, "%.4lf", arg);
+
+			appendToBuffer(buffer, pos, fb[0 .. count]);
+		} else static if(is(typeof(arg) == InterpolatedExpression!code, string code)) {
+			static if(printInterpolatedCode) {
+				appendToBuffer(buffer, pos, code);
+				appendToBuffer(buffer, pos, " = ");
+			}
 		} else static if(is(typeof(arg.toString()) : const char[])) {
 			appendToBuffer(buffer, pos, arg.toString());
+		} else static if(is(typeof(arg) A == struct)) {
+			appendToBuffer(buffer, pos, A.stringof);
+			appendToBuffer(buffer, pos, "(");
+			foreach(idx, item; arg.tupleof) {
+				if(idx)
+					appendToBuffer(buffer, pos, ", ");
+				appendToBuffer(buffer, pos, __traits(identifier, arg.tupleof[idx]));
+				appendToBuffer(buffer, pos, ": ");
+				appendToBuffer(buffer, pos, item);
+			}
+			appendToBuffer(buffer, pos, ")");
+		} else static if(is(typeof(arg) == E[], E)) {
+			appendToBuffer(buffer, pos, "[");
+			foreach(idx, item; arg) {
+				if(idx)
+					appendToBuffer(buffer, pos, ", ");
+				appendToBuffer(buffer, pos, item);
+			}
+			appendToBuffer(buffer, pos, "]");
 		} else {
 			appendToBuffer(buffer, pos, "<" ~ typeof(arg).stringof ~ ">");
 		}
@@ -6237,8 +8818,18 @@ void writeln(T...)(T t) {
 	actuallyWriteToStdout(buffer[0 .. pos]);
 }
 
+debug void dump(T...)(T t, string file = __FILE__, size_t line = __LINE__) {
+	writeln!true(file, ":", line, ": ", t);
+}
+
 private void actuallyWriteToStdout(scope char[] buffer) @trusted {
-	version(Windows) {
+
+	version(UseStdioWriteln)
+	{
+		import std.stdio;
+		writeln(buffer);
+	}
+	else version(Windows) {
 		import core.sys.windows.wincon;
 
 		auto hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -6505,6 +9096,7 @@ struct Timeout {
 }
 
 Timeout setTimeout(void delegate() dg, int msecs, int permittedJitter = 20) {
+static assert(0);
 	return Timeout.init;
 }
 
@@ -6636,7 +9228,7 @@ so the end result is you keep the last ones. it wouldn't report errors if multip
 
 +/
 
-private version(Windows) extern(Windows) {
+package(arsd) version(Windows) extern(Windows) {
 	BOOL CancelIoEx(HANDLE, LPOVERLAPPED);
 
 	struct WSABUF {
@@ -6654,4 +9246,602 @@ private version(Windows) extern(Windows) {
 
 	int WSARecv(SOCKET, LPWSABUF, DWORD, LPDWORD, LPDWORD, LPOVERLAPPED, LPOVERLAPPED_COMPLETION_ROUTINE);
 	int WSARecvFrom(SOCKET, LPWSABUF, DWORD, LPDWORD, LPDWORD, sockaddr*, LPINT, LPOVERLAPPED, LPOVERLAPPED_COMPLETION_ROUTINE);
+}
+
+package(arsd) static if(UseCocoa) {
+
+/* Copy/paste chunk from Jacob Carlborg { */
+// from https://raw.githubusercontent.com/jacob-carlborg/druntime/550edd0a64f0eb2c4f35d3ec3d88e26b40ac779e/src/core/stdc/clang_block.d
+// with comments stripped (see docs in the original link), code reformatted, and some names changed to avoid potential conflicts
+
+import core.stdc.config;
+struct ObjCBlock(R = void, Params...) {
+private:
+	alias extern(C) R function(ObjCBlock*, Params) Invoke;
+
+	void* isa;
+	int flags;
+	int reserved = 0;
+	Invoke invoke;
+	Descriptor* descriptor;
+
+	// Imported variables go here
+	R delegate(Params) dg;
+
+	this(void* isa, int flags, Invoke invoke, R delegate(Params) dg) {
+		this.isa = isa;
+		this.flags = flags;
+		this.invoke = invoke;
+		this.dg = dg;
+		this.descriptor = &.objcblock_descriptor;
+	}
+}
+ObjCBlock!(R, Params) block(R, Params...)(R delegate(Params) dg) {
+	static if (Params.length == 0)
+	    enum flags = 0x50000000;
+	else
+		enum flags = 0x40000000;
+
+	return ObjCBlock!(R, Params)(&_NSConcreteStackBlock, flags, &objcblock_invoke!(R, Params), dg);
+}
+
+private struct Descriptor {
+    c_ulong reserved;
+    c_ulong size;
+    const(char)* signature;
+}
+private extern(C) extern __gshared void*[32] _NSConcreteStackBlock;
+private __gshared auto objcblock_descriptor = Descriptor(0, ObjCBlock!().sizeof);
+private extern(C) R objcblock_invoke(R, Args...)(ObjCBlock!(R, Args)* block, Args args) {
+    return block.dg(args);
+}
+
+
+/* End copy/paste chunk from Jacob Carlborg } */
+
+
+/+
+To let Cocoa know that you intend to use multiple threads, all you have to do is spawn a single thread using the NSThread class and let that thread immediately exit. Your thread entry point need not do anything. Just the act of spawning a thread using NSThread is enough to ensure that the locks needed by the Cocoa frameworks are put in place.
+
+If you are not sure if Cocoa thinks your application is multithreaded or not, you can use the isMultiThreaded method of NSThread to check.
++/
+
+
+	struct DeifiedNSString {
+		char[16] sso;
+		const(char)[] str;
+
+		this(NSString s) {
+			auto len = s.length;
+			if(len <= sso.length / 4)
+				str = sso[];
+			else
+				str = new char[](len * 4);
+
+			NSUInteger count;
+			NSRange leftover;
+			auto ret = s.getBytes(cast(char*) str.ptr, str.length, &count, NSStringEncoding.NSUTF8StringEncoding, NSStringEncodingConversionOptions.none, NSRange(0, len), &leftover);
+			if(ret)
+				str = str[0 .. count];
+			else
+				throw new Exception("uh oh");
+		}
+	}
+
+	extern (Objective-C) {
+		import core.attribute; // : selector, optional;
+
+		alias NSUInteger = size_t;
+		alias NSInteger = ptrdiff_t;
+		alias unichar = wchar;
+		struct SEL_;
+		alias SEL_* SEL;
+		// this is called plain `id` in objective C but i fear mistakes with that in D. like sure it is a type instead of a variable like most things called id but i still think it is weird. i might change my mind later.
+		alias void* NSid; // FIXME? the docs say this is a pointer to an instance of a class, but that is not necessary a child of NSObject
+
+		extern class NSObject {
+			static NSObject alloc() @selector("alloc");
+			NSObject init() @selector("init");
+
+			void retain() @selector("retain");
+			void release() @selector("release");
+			void autorelease() @selector("autorelease");
+
+			void performSelectorOnMainThread(SEL aSelector, NSid arg, bool waitUntilDone) @selector("performSelectorOnMainThread:withObject:waitUntilDone:");
+		}
+
+		// this is some kind of generic in objc...
+		extern class NSArray : NSObject {
+			static NSArray arrayWithObjects(NSid* objects, NSUInteger count) @selector("arrayWithObjects:count:");
+		}
+
+		extern class NSString : NSObject {
+			override static NSString alloc() @selector("alloc");
+			override NSString init() @selector("init");
+
+			NSString initWithUTF8String(const scope char* str) @selector("initWithUTF8String:");
+
+			NSString initWithBytes(
+				const(ubyte)* bytes,
+				NSUInteger length,
+				NSStringEncoding encoding
+			) @selector("initWithBytes:length:encoding:");
+
+			unichar characterAtIndex(NSUInteger index) @selector("characterAtIndex:");
+			NSUInteger length() @selector("length");
+			const char* UTF8String() @selector("UTF8String");
+
+			void getCharacters(wchar* buffer, NSRange range) @selector("getCharacters:range:");
+
+			bool getBytes(void* buffer, NSUInteger maxBufferCount, NSUInteger* usedBufferCount, NSStringEncoding encoding, NSStringEncodingConversionOptions options, NSRange range, NSRange* leftover) @selector("getBytes:maxLength:usedLength:encoding:options:range:remainingRange:");
+		}
+
+		struct NSRange {
+			NSUInteger loc;
+			NSUInteger len;
+		}
+
+		enum NSStringEncodingConversionOptions : NSInteger {
+			none = 0,
+			NSAllowLossyEncodingConversion = 1,
+			NSExternalRepresentationEncodingConversion = 2
+		}
+
+		enum NSEventType {
+			idk
+
+		}
+
+		enum NSEventModifierFlags : NSUInteger {
+			NSEventModifierFlagCapsLock = 1 << 16,
+			NSEventModifierFlagShift = 1 << 17,
+			NSEventModifierFlagControl = 1 << 18,
+			NSEventModifierFlagOption = 1 << 19, // aka Alt
+			NSEventModifierFlagCommand = 1 << 20, // aka super
+			NSEventModifierFlagNumericPad = 1 << 21,
+			NSEventModifierFlagHelp = 1 << 22,
+			NSEventModifierFlagFunction = 1 << 23,
+			NSEventModifierFlagDeviceIndependentFlagsMask = 0xffff0000UL
+		}
+
+		version(OSX)
+		extern class NSEvent : NSObject {
+			NSEventType type() @selector("type");
+
+			NSPoint locationInWindow() @selector("locationInWindow");
+			NSTimeInterval timestamp() @selector("timestamp");
+			NSWindow window() @selector("window"); // note: nullable
+			NSEventModifierFlags modifierFlags() @selector("modifierFlags");
+
+			NSString characters() @selector("characters");
+			NSString charactersIgnoringModifiers() @selector("charactersIgnoringModifiers");
+			ushort keyCode() @selector("keyCode");
+			ushort specialKey() @selector("specialKey");
+
+			static NSUInteger pressedMouseButtons() @selector("pressedMouseButtons");
+			NSPoint locationInWindow() @selector("locationInWindow"); // in screen coordinates
+			static NSPoint mouseLocation() @selector("mouseLocation"); // in screen coordinates
+			NSInteger buttonNumber() @selector("buttonNumber");
+
+			CGFloat deltaX() @selector("deltaX");
+			CGFloat deltaY() @selector("deltaY");
+			CGFloat deltaZ() @selector("deltaZ");
+
+			bool hasPreciseScrollingDeltas() @selector("hasPreciseScrollingDeltas");
+
+			CGFloat scrollingDeltaX() @selector("scrollingDeltaX");
+			CGFloat scrollingDeltaY() @selector("scrollingDeltaY");
+
+			// @property(getter=isDirectionInvertedFromDevice, readonly) BOOL directionInvertedFromDevice;
+		}
+
+		extern /* final */ class NSTimer : NSObject { // the docs say don't subclass this, but making it final breaks the bridge
+			override static NSTimer alloc() @selector("alloc");
+			override NSTimer init() @selector("init");
+
+			static NSTimer schedule(NSTimeInterval timeIntervalInSeconds, NSid target, SEL selector, NSid userInfo, bool repeats) @selector("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:");
+
+			void fire() @selector("fire");
+			void invalidate() @selector("invalidate");
+
+			bool valid() @selector("isValid");
+			// @property(copy) NSDate *fireDate;
+			NSTimeInterval timeInterval() @selector("timeInterval");
+			NSid userInfo() @selector("userInfo");
+
+			NSTimeInterval tolerance() @selector("tolerance");
+			NSTimeInterval tolerance(NSTimeInterval) @selector("setTolerance:");
+		}
+
+		alias NSTimeInterval = double;
+
+		version(OSX)
+		extern class NSResponder : NSObject {
+			NSMenu menu() @selector("menu");
+			void menu(NSMenu menu) @selector("setMenu:");
+
+			void keyDown(NSEvent event) @selector("keyDown:");
+			void keyUp(NSEvent event) @selector("keyUp:");
+
+			// - (void)interpretKeyEvents:(NSArray<NSEvent *> *)eventArray;
+
+			void mouseDown(NSEvent event) @selector("mouseDown:");
+			void mouseDragged(NSEvent event) @selector("mouseDragged:");
+			void mouseUp(NSEvent event) @selector("mouseUp:");
+			void mouseMoved(NSEvent event) @selector("mouseMoved:");
+			void mouseEntered(NSEvent event) @selector("mouseEntered:");
+			void mouseExited(NSEvent event) @selector("mouseExited:");
+
+			void rightMouseDown(NSEvent event) @selector("rightMouseDown:");
+			void rightMouseDragged(NSEvent event) @selector("rightMouseDragged:");
+			void rightMouseUp(NSEvent event) @selector("rightMouseUp:");
+
+			void otherMouseDown(NSEvent event) @selector("otherMouseDown:");
+			void otherMouseDragged(NSEvent event) @selector("otherMouseDragged:");
+			void otherMouseUp(NSEvent event) @selector("otherMouseUp:");
+
+			void scrollWheel(NSEvent event) @selector("scrollWheel:");
+
+			// touch events should also be here btw among others
+		}
+
+		version(OSX)
+		extern class NSApplication : NSResponder {
+			static NSApplication shared_() @selector("sharedApplication");
+
+			NSApplicationDelegate delegate_() @selector("delegate");
+			void delegate_(NSApplicationDelegate) @selector("setDelegate:");
+
+			bool setActivationPolicy(NSApplicationActivationPolicy activationPolicy) @selector("setActivationPolicy:");
+
+			void activateIgnoringOtherApps(bool flag) @selector("activateIgnoringOtherApps:");
+
+			@property NSMenu mainMenu() @selector("mainMenu");
+			@property NSMenu mainMenu(NSMenu) @selector("setMainMenu:");
+
+			void run() @selector("run");
+
+			void terminate(void*) @selector("terminate:");
+		}
+
+		version(OSX)
+		extern interface NSApplicationDelegate {
+			void applicationWillFinishLaunching(NSNotification notification) @selector("applicationWillFinishLaunching:");
+			void applicationDidFinishLaunching(NSNotification notification) @selector("applicationDidFinishLaunching:");
+			bool applicationShouldTerminateAfterLastWindowClosed(NSNotification notification) @selector("applicationShouldTerminateAfterLastWindowClosed:");
+		}
+
+		extern class NSNotification : NSObject {
+			@property NSid object() @selector("object");
+		}
+
+		enum NSApplicationActivationPolicy : ptrdiff_t {
+			/* The application is an ordinary app that appears in the Dock and may have a user interface.  This is the default for bundled apps, unless overridden in the Info.plist. */
+			regular,
+
+			/* The application does not appear in the Dock and does not have a menu bar, but it may be activated programmatically or by clicking on one of its windows.  This corresponds to LSUIElement=1 in the Info.plist. */
+			accessory,
+
+			/* The application does not appear in the Dock and may not create windows or be activated.  This corresponds to LSBackgroundOnly=1 in the Info.plist.  This is also the default for unbundled executables that do not have Info.plists. */
+			prohibited
+		}
+
+		extern class NSGraphicsContext : NSObject {
+			static NSGraphicsContext currentContext() @selector("currentContext");
+			NSGraphicsContext graphicsPort() @selector("graphicsPort");
+		}
+
+		version(OSX)
+		extern class NSMenu : NSObject {
+			override static NSMenu alloc() @selector("alloc");
+
+			override NSMenu init() @selector("init");
+			NSMenu init(NSString title) @selector("initWithTitle:");
+
+			void setSubmenu(NSMenu menu, NSMenuItem item) @selector("setSubmenu:forItem:");
+			void addItem(NSMenuItem newItem) @selector("addItem:");
+
+			NSMenuItem addItem(
+				NSString title,
+				SEL selector,
+				NSString charCode
+			) @selector("addItemWithTitle:action:keyEquivalent:");
+		}
+
+		version(OSX)
+		extern class NSMenuItem : NSObject {
+			override static NSMenuItem alloc() @selector("alloc");
+			override NSMenuItem init() @selector("init");
+
+			NSMenuItem init(
+				NSString title,
+				SEL selector,
+				NSString charCode
+			) @selector("initWithTitle:action:keyEquivalent:");
+
+			void enabled(bool) @selector("setEnabled:");
+
+			NSResponder target(NSResponder) @selector("setTarget:");
+		}
+
+		enum NSWindowStyleMask : size_t {
+			borderless = 0,
+			titled = 1 << 0,
+			closable = 1 << 1,
+			miniaturizable = 1 << 2,
+			resizable	= 1 << 3,
+
+			/* Specifies a window with textured background. Textured windows generally don't draw a top border line under the titlebar/toolbar. To get that line, use the NSUnifiedTitleAndToolbarWindowMask mask.
+			 */
+			texturedBackground = 1 << 8,
+
+			/* Specifies a window whose titlebar and toolbar have a unified look - that is, a continuous background. Under the titlebar and toolbar a horizontal separator line will appear.
+			 */
+			unifiedTitleAndToolbar = 1 << 12,
+
+			/* When set, the window will appear full screen. This mask is automatically toggled when toggleFullScreen: is called.
+			 */
+			fullScreen = 1 << 14,
+
+			/* If set, the contentView will consume the full size of the window; it can be combined with other window style masks, but is only respected for windows with a titlebar.
+			 Utilizing this mask opts-in to layer-backing. Utilize the contentLayoutRect or auto-layout contentLayoutGuide to layout views underneath the titlebar/toolbar area.
+			 */
+			fullSizeContentView = 1 << 15,
+
+			/* The following are only applicable for NSPanel (or a subclass thereof)
+			 */
+			utilityWindow			= 1 << 4,
+			docModalWindow		 = 1 << 6,
+			nonactivatingPanel		= 1 << 7, // Specifies that a panel that does not activate the owning application
+			hUDWindow = 1 << 13 // Specifies a heads up display panel
+		}
+
+		version(OSX)
+		extern class NSWindow : NSObject {
+			override static NSWindow alloc() @selector("alloc");
+
+			override NSWindow init() @selector("init");
+
+			NSWindow initWithContentRect(
+				NSRect contentRect,
+				NSWindowStyleMask style,
+				NSBackingStoreType bufferingType,
+				bool flag
+			) @selector("initWithContentRect:styleMask:backing:defer:");
+
+			void makeKeyAndOrderFront(NSid sender) @selector("makeKeyAndOrderFront:");
+			NSView contentView() @selector("contentView");
+			void contentView(NSView view) @selector("setContentView:");
+			void orderFrontRegardless() @selector("orderFrontRegardless");
+			void center() @selector("center");
+
+			NSRect frame() @selector("frame");
+
+			NSRect contentRectForFrameRect(NSRect frameRect) @selector("contentRectForFrameRect:");
+
+			NSString title() @selector("title");
+			void title(NSString value) @selector("setTitle:");
+
+			void close() @selector("close");
+
+			NSWindowDelegate delegate_() @selector("delegate");
+			void delegate_(NSWindowDelegate) @selector("setDelegate:");
+
+			void setBackgroundColor(NSColor color) @selector("setBackgroundColor:");
+		}
+
+		version(OSX)
+		extern interface NSWindowDelegate {
+			@optional:
+			void windowDidResize(NSNotification notification) @selector("windowDidResize:");
+
+			NSSize windowWillResize(NSWindow sender, NSSize frameSize) @selector("windowWillResize:toSize:");
+
+			void windowWillClose(NSNotification notification) @selector("windowWillClose:");
+		}
+
+		version(OSX)
+		extern class NSView : NSResponder {
+			//override NSView init() @selector("init");
+			NSView initWithFrame(NSRect frameRect) @selector("initWithFrame:");
+
+			void addSubview(NSView view) @selector("addSubview:");
+
+			bool wantsLayer() @selector("wantsLayer");
+			void wantsLayer(bool value) @selector("setWantsLayer:");
+
+			CALayer layer() @selector("layer");
+			void uiDelegate(NSObject) @selector("setUIDelegate:");
+
+			void drawRect(NSRect rect) @selector("drawRect:");
+			bool isFlipped() @selector("isFlipped");
+			bool acceptsFirstResponder() @selector("acceptsFirstResponder");
+			bool setNeedsDisplay(bool) @selector("setNeedsDisplay:");
+
+			// DO NOT USE: https://issues.dlang.org/show_bug.cgi?id=19017
+			// an asm { pop RAX; } after getting the struct can kinda hack around this but still
+			@property NSRect frame() @selector("frame");
+			@property NSRect frame(NSRect rect) @selector("setFrame:");
+
+			void setFrameSize(NSSize newSize) @selector("setFrameSize:");
+			void setFrameOrigin(NSPoint newOrigin) @selector("setFrameOrigin:");
+
+			void addSubview(NSView what) @selector("addSubview:");
+			void removeFromSuperview() @selector("removeFromSuperview");
+		}
+
+		extern class NSFont : NSObject {
+			void set() @selector("set"); // sets it into the current graphics context
+			void setInContext(NSGraphicsContext context) @selector("setInContext:");
+
+			static NSFont fontWithName(NSString fontName, CGFloat fontSize) @selector("fontWithName:size:");
+			// fontWithDescriptor too
+			// fontWithName and matrix too
+			static NSFont systemFontOfSize(CGFloat fontSize) @selector("systemFontOfSize:");
+			// among others
+
+			@property CGFloat pointSize() @selector("pointSize");
+			@property bool isFixedPitch() @selector("isFixedPitch");
+			// fontDescriptor
+			@property NSString displayName() @selector("displayName");
+
+			@property CGFloat ascender() @selector("ascender");
+			@property CGFloat descender() @selector("descender"); // note it is negative
+			@property CGFloat capHeight() @selector("capHeight");
+			@property CGFloat leading() @selector("leading");
+			@property CGFloat xHeight() @selector("xHeight");
+			// among many more
+		}
+
+		extern class NSColor : NSObject {
+			override static NSColor alloc() @selector("alloc");
+			static NSColor redColor() @selector("redColor");
+			static NSColor whiteColor() @selector("whiteColor");
+
+			CGColorRef CGColor() @selector("CGColor");
+		}
+
+		extern class CALayer : NSObject {
+			CGFloat borderWidth() @selector("borderWidth");
+			void borderWidth(CGFloat value) @selector("setBorderWidth:");
+
+			CGColorRef borderColor() @selector("borderColor");
+			void borderColor(CGColorRef) @selector("setBorderColor:");
+		}
+
+
+		version(OSX)
+		extern class NSViewController : NSObject {
+			NSView view() @selector("view");
+			void view(NSView view) @selector("setView:");
+		}
+
+		enum NSBackingStoreType : size_t {
+			retained = 0,
+			nonretained = 1,
+			buffered = 2
+		}
+
+		enum NSStringEncoding : NSUInteger {
+			NSASCIIStringEncoding = 1,		/* 0..127 only */
+			NSUTF8StringEncoding = 4,
+			NSUnicodeStringEncoding = 10,
+
+			NSUTF16StringEncoding = NSUnicodeStringEncoding,
+			NSUTF16BigEndianStringEncoding = 0x90000100,
+			NSUTF16LittleEndianStringEncoding = 0x94000100,
+			NSUTF32StringEncoding = 0x8c000100,
+			NSUTF32BigEndianStringEncoding = 0x98000100,
+			NSUTF32LittleEndianStringEncoding = 0x9c000100
+		}
+
+
+		struct CGColor;
+		alias CGColorRef = CGColor*;
+
+		// note on the watch os it is float, not double
+		alias CGFloat = double;
+
+		struct NSPoint {
+			CGFloat x;
+			CGFloat y;
+		}
+
+		struct NSSize {
+			CGFloat width;
+			CGFloat height;
+		}
+
+		struct NSRect {
+			NSPoint origin;
+			NSSize size;
+		}
+
+		alias NSPoint CGPoint;
+		alias NSSize CGSize;
+		alias NSRect CGRect;
+
+		pragma(inline, true) NSPoint NSMakePoint(CGFloat x, CGFloat y) {
+			NSPoint p;
+			p.x = x;
+			p.y = y;
+			return p;
+		}
+
+		pragma(inline, true) NSSize NSMakeSize(CGFloat w, CGFloat h) {
+			NSSize s;
+			s.width = w;
+			s.height = h;
+			return s;
+		}
+
+		pragma(inline, true) NSRect NSMakeRect(CGFloat x, CGFloat y, CGFloat w, CGFloat h) {
+			NSRect r;
+			r.origin.x = x;
+			r.origin.y = y;
+			r.size.width = w;
+			r.size.height = h;
+			return r;
+		}
+
+
+	}
+
+	// helper raii refcount object
+	static if(UseCocoa)
+	struct MacString {
+		union {
+			// must be wrapped cuz of bug in dmd
+			// referencing an init symbol when it should
+			// just be null. but the union makes it work
+			NSString s;
+		}
+
+		// FIXME: if a string literal it would be kinda nice to use
+		// the other function. but meh
+
+		this(scope const char[] str) {
+			this.s = NSString.alloc.initWithBytes(
+				cast(const(ubyte)*) str.ptr,
+				str.length,
+				NSStringEncoding.NSUTF8StringEncoding
+			);
+		}
+
+		NSString borrow() {
+			return s;
+		}
+
+		this(this) {
+			if(s !is null)
+				s.retain();
+		}
+
+		~this() {
+			if(s !is null) {
+				s.release();
+				s = null;
+			}
+		}
+	}
+
+	extern(C) void NSLog(NSString, ...);
+	extern(C) SEL sel_registerName(const(char)* str);
+
+	version(OSX)
+	extern (Objective-C) __gshared NSApplication NSApp_;
+
+	version(OSX)
+	NSApplication NSApp() {
+		if(NSApp_ is null)
+			NSApp_ = NSApplication.shared_;
+		return NSApp_;
+	}
+
+	version(DigitalMars) {
+	// hacks to work around compiler bug
+	extern(C) __gshared void* _D4arsd4core17NSGraphicsContext7__ClassZ = null;
+	extern(C) __gshared void* _D4arsd4core6NSView7__ClassZ = null;
+	extern(C) __gshared void* _D4arsd4core8NSWindow7__ClassZ = null;
+	}
 }

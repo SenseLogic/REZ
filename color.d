@@ -128,23 +128,64 @@ struct Color {
 	}
 
 @safe:
-	/++
-		The color components are available as a static array, individual bytes, and a uint inside this union.
 
-		Since it is anonymous, you can use the inner members' names directly.
-	+/
-	union {
-		ubyte[4] components; /// [r, g, b, a]
+	ubyte[4] components; /// [r, g, b, a]
 
-		/// Holder for rgba individual components.
-		struct {
-			ubyte r; /// red
-			ubyte g; /// green
-			ubyte b; /// blue
-			ubyte a; /// alpha. 255 == opaque
+	// The color components are available as individual bytes and a uint through this property functions.
+	// Unlike an anonymous union, this works with CTFE as well.
+	@safe pure nothrow @nogc {
+		// individual rgb components
+		pragma(inline, true) ref inout(ubyte) r() inout scope return { return components[0]; } /// red
+		pragma(inline, true) ref inout(ubyte) g() inout scope return { return components[1]; } /// green
+		pragma(inline, true) ref inout(ubyte) b() inout scope return { return components[2]; } /// blue
+		pragma(inline, true) ref inout(ubyte) a() inout scope return { return components[3]; } /// alpha. 255 == opaque
+
+		/*
+		pragma(inline, true) void r(ubyte value) { components[0] = value; } /// red
+		pragma(inline, true) void g(ubyte value) { components[1] = value; } /// green
+		pragma(inline, true) void b(ubyte value) { components[2] = value; } /// blue
+		pragma(inline, true) void a(ubyte value) { components[3] = value; } /// alpha. 255 == opaque
+		*/
+
+		/// The components as a single 32 bit value (beware of endian issues!)
+		uint asUint() inout {
+			if (__ctfe) {
+				version (LittleEndian)
+					return (r) | (g << 8) | (b << 16) | (a << 24);
+				else version (BigEndian)
+					return (r << 24) | (g << 16) | (b << 8) | (a);
+				else
+					static assert(false, "Unsupported endianness");
+			} else {
+				return (cast(inout(uint)[1]) components)[0];
+			}
 		}
 
-		uint asUint; /// The components as a single 32 bit value (beware of endian issues!)
+		/// ditto
+		void asUint(uint value) {
+			if (__ctfe) {
+				version (LittleEndian) {
+					r = (value & 0xFF);
+					g = ((value & 0xFF_00) >> 8);
+					b = ((value & 0xFF_00_00) >> 16);
+					a = ((value & 0xFF_00_00_00) >> 24);
+				} else version (BigEndian) {
+					r = ((value & 0xFF_00_00_00) >> 24);
+					g = ((value & 0xFF_00_00) >> 16);
+					b = ((value & 0xFF_00) >> 8);
+					a = (value & 0xFF);
+				} else {
+					static assert(false, "Unsupported endianness");
+				}
+			} else {
+				components = function(uint value) @trusted {
+					return *(cast(ubyte[4]*) cast(void*) &value);
+				}(value);
+			}
+		}
+
+		/// ditto
+		uint opCast(T : uint)() inout { return this.asUint; }
 	}
 
 	/++
@@ -230,6 +271,20 @@ struct Color {
 		this.g = cast(ubyte) (g * 255);
 		this.b = cast(ubyte) (b * 255);
 		this.a = cast(ubyte) (a * 255);
+	}
+
+	/++
+		Constructs a color from a [ColorF] (floating-point)
+
+		History:
+			Added December 20, 2023
+	+/
+	nothrow pure @nogc
+	this(const ColorF colorF) {
+		this.r = cast(ubyte) (colorF.r * 255);
+		this.g = cast(ubyte) (colorF.g * 255);
+		this.b = cast(ubyte) (colorF.b * 255);
+		this.a = cast(ubyte) (colorF.a * 255);
 	}
 
 	/// Static convenience functions for common color names
@@ -513,6 +568,74 @@ struct Color {
 }
 
 /++
+	Represents an RGBA color in floating-point (from 0 to 1.0).
+
+	$(NOTE
+		Most of the time, you’ll probably want to use [Color] instead.
+
+		This primarily exists to provide a tested out-of-the-box solution
+		when utilizing APIs that work with FP colors.
+
+		Constructors and setters come with $(B `in`-contracts)
+		to assert one won’t run into out-of-range color values.
+	)
+
+	History:
+		Added December 20, 2023
+ +/
+struct ColorF {
+
+	private float[4] _components;
+
+@safe pure nothrow @nogc:
+
+	///
+	public this(const float[4] components)
+			in(isValidComponent(components[0]))
+			in(isValidComponent(components[1]))
+			in(isValidComponent(components[2]))
+			in(isValidComponent(components[3])) {
+		_components = components;
+	}
+
+	/// ditto
+	public this(float r, float g, float b, float a = 1.0f)
+			in(isValidComponent(r))
+			in(isValidComponent(g))
+			in(isValidComponent(b))
+			in(isValidComponent(a)) {
+		_components = [r, g, b, a];
+	}
+
+	/++
+		Constructs a FP color from an integer one
+	 +/
+	public this(const Color integer) {
+		_components[] = integer.components[] / 255.0f;
+	}
+
+	///
+	float[4] components() inout { return _components; }
+
+	// component getters
+	float r() inout { return _components[0]; } /// red
+	float g() inout { return _components[1]; } /// green
+	float b() inout { return _components[2]; } /// blue
+	float a() inout { return _components[3]; } /// alpha
+
+	// component setters
+	void r(float v) in(isValidComponent(v)) { _components[0] = v; } /// red
+	void g(float v) in(isValidComponent(v)) { _components[1] = v; } /// green
+	void b(float v) in(isValidComponent(v)) { _components[2] = v; } /// blue
+	void a(float v) in(isValidComponent(v)) { _components[3] = v; } /// alpha
+
+	///
+	static bool isValidComponent(const float v) {
+		return (v >= 0.0f && v <= 1.0f);
+	}
+}
+
+/++
 	OKLab colorspace conversions to/from [Color]. See: [https://bottosson.github.io/posts/oklab/]
 
 	L = perceived lightness. From 0 to 1.0.
@@ -720,6 +843,8 @@ void premultiplyBgra(ubyte[] bgra) pure @nogc @safe nothrow in { assert(bgra.len
 
 void unPremultiplyRgba(ubyte[] rgba) pure @nogc @safe nothrow in { assert(rgba.length == 4); } do {
 	auto a = rgba[3];
+	if(a == 0)
+		return;
 
 	rgba[0] = cast(ubyte)(rgba[0] * 255 / a);
 	rgba[1] = cast(ubyte)(rgba[1] * 255 / a);
@@ -1761,10 +1886,12 @@ void floydSteinbergDither(IndexedImage img, in TrueColorImage original) nothrow 
 
 // these are just really useful in a lot of places where the color/image functions are used,
 // so I want them available with Color
-///
+/++
+	2D location point
+ +/
 struct Point {
-	int x; ///
-	int y; ///
+	int x; /// x-coordinate (aka abscissa)
+	int y; /// y-coordinate (aka ordinate)
 
 	pure const nothrow @safe:
 
@@ -1775,6 +1902,27 @@ struct Point {
 	Point opBinary(string op)(int rhs) @nogc {
 		return Point(mixin("x" ~ op ~ "rhs"), mixin("y" ~ op ~ "rhs"));
 	}
+
+	Size opCast(T : Size)() inout @nogc {
+		return Size(x, y);
+	}
+
+	/++
+		Calculates the point of linear offset in a rectangle.
+
+		`Offset = 0` is assumed to be equivalent to `Point(0,0)`.
+
+		See_also:
+			[linearOffset] is the inverse function.
+
+		History:
+			Added October 05, 2024.
+	 +/
+	static Point fromLinearOffset(int linearOffset, int width) @nogc {
+		const y = (linearOffset / width);
+		const x = (linearOffset % width);
+		return Point(x, y);
+	}
 }
 
 ///
@@ -1782,7 +1930,65 @@ struct Size {
 	int width; ///
 	int height; ///
 
-	int area() pure nothrow @safe const @nogc { return width * height; }
+	pure nothrow @safe:
+
+	/++
+		Rectangular surface area
+
+		Calculates the surface area of a rectangle with dimensions equivalent to the width and height of the size.
+	 +/
+	int area() const @nogc { return width * height; }
+
+	Point opCast(T : Point)() inout @nogc {
+		return Point(width, height);
+	}
+
+	// gonna leave this undocumented for now since it might be removed later
+	/+ +
+		Adding (and other arithmetic operations) two sizes together will operate on the width and height independently. So Size(2, 3) + Size(4, 5) will give you Size(6, 8).
+	+/
+	Size opBinary(string op)(in Size rhs) const @nogc {
+		return Size(
+			mixin("width" ~ op ~ "rhs.width"),
+			mixin("height" ~ op ~ "rhs.height"),
+		);
+	}
+
+	Size opBinary(string op)(int rhs) const @nogc {
+		return Size(
+			mixin("width" ~ op ~ "rhs"),
+			mixin("height" ~ op ~ "rhs"),
+		);
+	}
+}
+
+/++
+	Calculates the linear offset of a point
+	from the start (0/0) of a rectangle.
+
+	This assumes that (0/0) is equivalent to offset `0`.
+	Each step on the x-coordinate advances the resulting offset by `1`.
+	Each step on the y-coordinate advances the resulting offset by `width`.
+
+	This function is only defined for the 1st quadrant,
+	i.e. both coordinates (x and y) of `pos` are positive.
+
+	Returns:
+		`y * width + x`
+
+	See_also:
+		[Point.fromLinearOffset] is the inverse function.
+
+	History:
+		Added December 19, 2023 (dub v11.4)
+ +/
+int linearOffset(const Point pos, const int width) @safe pure nothrow @nogc {
+	return ((width * pos.y) + pos.x);
+}
+
+/// ditto
+int linearOffset(const int width, const Point pos) @safe pure nothrow @nogc {
+	return ((width * pos.y) + pos.x);
 }
 
 ///
@@ -1881,6 +2087,73 @@ struct Rectangle {
 
 		return tmp;
 	}
+}
+
+/++
+	A type to represent an angle, taking away ambiguity of if it wants degrees or radians.
+
+	---
+		Angle a = Angle.degrees(180);
+		Angle b = Angle.radians(3.14159);
+
+		// note there might be slight changes in precision due to internal conversions
+	---
+
+	History:
+		Added August 29, 2023 (dub v11.1)
++/
+struct Angle {
+	private enum PI = 3.14159265358979;
+	private float angle;
+
+	pure @nogc nothrow @safe:
+
+	private this(float angle) {
+		this.angle = angle;
+	}
+
+	/++
+
+	+/
+	float degrees() const {
+		return angle * 180.0 / PI;
+	}
+
+	/// ditto
+	static Angle degrees(float deg) {
+		return Angle(deg * PI / 180.0);
+	}
+
+	/// ditto
+	float radians() const {
+		return angle;
+	}
+
+	/// ditto
+	static Angle radians(float rad) {
+		return Angle(rad);
+	}
+
+	/++
+		The +, -, +=, and -= operators all work on the angles too.
+	+/
+	Angle opBinary(string op : "+")(const Angle rhs) const {
+		return Angle(this.angle + rhs.angle);
+	}
+	/// ditto
+	Angle opBinary(string op : "-")(const Angle rhs) const {
+		return Angle(this.angle + rhs.angle);
+	}
+	/// ditto
+	Angle opOpAssign(string op : "+")(const Angle rhs) {
+		return this.angle += rhs.angle;
+	}
+	/// ditto
+	Angle opOpAssign(string op : "-")(const Angle rhs) {
+		return this.angle -= rhs.angle;
+	}
+
+	// maybe sin, cos, tan but meh you can .radians on them too.
 }
 
 private int max(int a, int b) @nogc nothrow pure @safe {
